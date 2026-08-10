@@ -1,0 +1,16 @@
+{"question":"When does NimbusFlow create our monthly invoice?","expected_document_ids":["billing-invoices"],"expected_answerable":true,"tenant_id":"demo","product":"nimbusflow","version":"1.0"}
+{"question":"How many times is a failed card payment retried?","expected_document_ids":["billing-invoices"],"expected_answerable":true,"tenant_id":"demo","product":"nimbusflow","version":"1.0"}
+{"question":"Does a Growth plan upgrade take effect immediately and is it prorated?","expected_document_ids":["plans-usage"],"expected_answerable":true,"tenant_id":"demo","product":"nimbusflow","version":"1.0"}
+{"question":"Why is today's usage missing from the billing dashboard?","expected_document_ids":["plans-usage"],"expected_answerable":true,"tenant_id":"demo","product":"nimbusflow","version":"1.0"}
+{"question":"What is the API limit for a Growth workspace?","expected_document_ids":["api-rate-limits"],"expected_answerable":true,"tenant_id":"demo","product":"nimbusflow","version":"1.0"}
+{"question":"What should my client do after HTTP 429?","expected_document_ids":["api-rate-limits"],"expected_answerable":true,"tenant_id":"demo","product":"nimbusflow","version":"1.0"}
+{"question":"What is the safe sequence for rotating a production API key?","expected_document_ids":["api-authentication"],"expected_answerable":true,"tenant_id":"demo","product":"nimbusflow","version":"1.0"}
+{"question":"Why does AUTH_401_INVALID_KEY occur?","expected_document_ids":["error-codes"],"expected_answerable":true,"tenant_id":"demo","product":"nimbusflow","version":"1.0"}
+{"question":"What is the webhook retry schedule?","expected_document_ids":["webhooks"],"expected_answerable":true,"tenant_id":"demo","product":"nimbusflow","version":"1.0"}
+{"question":"Should I verify a webhook signature before parsing JSON?","expected_document_ids":["webhooks"],"expected_answerable":true,"tenant_id":"demo","product":"nimbusflow","version":"1.0"}
+{"question":"How do I recover a Salesforce connection after invalid_grant?","expected_document_ids":["salesforce-integration"],"expected_answerable":true,"tenant_id":"demo","product":"nimbusflow","version":"1.0"}
+{"question":"What does Salesforce INSUFFICIENT_ACCESS mean?","expected_document_ids":["salesforce-integration"],"expected_answerable":true,"tenant_id":"demo","product":"nimbusflow","version":"1.0"}
+{"question":"When should an INT_503_PROVIDER_UNAVAILABLE ticket be escalated?","expected_document_ids":["error-codes"],"expected_answerable":true,"tenant_id":"demo","product":"nimbusflow","version":"1.0"}
+{"question":"Which tickets must go to Billing Operations?","expected_document_ids":["support-escalation"],"expected_answerable":true,"tenant_id":"demo","product":"nimbusflow","version":"1.0"}
+{"question":"Does NimbusFlow provide an on-premises Linux desktop application?","expected_document_ids":[],"expected_answerable":false,"tenant_id":"demo","product":"nimbusflow","version":"1.0"}
+{"question":"Where can a workspace owner download an invoice?","expected_document_ids":["frequently-asked-questions"],"expected_answerable":true,"tenant_id":"demo","product":"nimbusflow","version":"1.0"}

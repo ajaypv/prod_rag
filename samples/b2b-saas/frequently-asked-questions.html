@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NimbusFlow Frequently Asked Questions</title>
+</head>
+<body>
+  <main>
+    <h1>NimbusFlow Frequently Asked Questions</h1>
+    <p>This is fictional test documentation for the prodRAG demo.</p>
+
+    <section>
+      <h2>Billing</h2>
+      <article>
+        <h3>Where can a workspace owner download an invoice?</h3>
+        <p>Open <strong>Settings &gt; Billing &gt; Invoices</strong>. Monthly invoices normally appear within two hours of the billing run. If an invoice is still missing after 24 hours, route the ticket to Billing Operations.</p>
+      </article>
+      <article>
+        <h3>What happens after a card payment fails?</h3>
+        <p>NimbusFlow retries the payment after 1 day, 3 days, and 7 days. The workspace remains active during the seven-day grace period and becomes read-only only if the third retry fails.</p>
+      </article>
+    </section>
+
+    <section>
+      <h2>API limits and authentication</h2>
+      <article>
+        <h3>What should a client do after HTTP 429?</h3>
+        <p>Honor the <code>Retry-After</code> header, then retry with exponential backoff and jitter. Stop after five attempts. API limits apply per workspace, so creating another API key does not bypass the limit.</p>
+      </article>
+      <article>
+        <h3>How does an administrator rotate an API key?</h3>
+        <p>Open <strong>Settings &gt; Developers &gt; API keys</strong>, create the replacement key, update the application, verify a test request, and revoke the old key. Both keys may overlap for up to 15 minutes during a scheduled rotation.</p>
+      </article>
+    </section>
+
+    <section>
+      <h2>Integrations</h2>
+      <article>
+        <h3>How do I recover from a Salesforce invalid_grant error?</h3>
+        <p>Open <strong>Settings &gt; Integrations &gt; Salesforce</strong>, select <strong>Reconnect</strong>, sign in, and approve access again. Reconnecting preserves the existing field mapping.</p>
+      </article>
+    </section>
+
+    <section>
+      <h2>Human review</h2>
+      <article>
+        <h3>Which questions must be handled by customer support?</h3>
+        <p>Human review is required when retrieval confidence is low, when the documentation does not contain enough evidence, or when a ticket contains sensitive data such as a credential, payment-card number, or government identifier. Customers should remove sensitive values and use the approved secure support channel.</p>
+      </article>
+    </section>
+  </main>
+</body>
+</html>

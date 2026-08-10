@@ -1,0 +1,6 @@
+{"question":"Why did my workspace become read-only after payment failures?","expected_category":"billing","expected_human_review":false,"purpose":"grounded billing answer"}
+{"question":"Our Growth workspace gets HTTP 429 at 300 requests per minute. What should we do?","expected_category":"api_limits","expected_human_review":false,"purpose":"exact limit and retry guidance"}
+{"question":"Salesforce returns invalid_grant after the admin changed credentials. How do we reconnect?","expected_category":"integration_error","expected_human_review":false,"purpose":"integration runbook"}
+{"question":"My API key is nf_live_DEMOSECRET123456789. Why is authentication failing?","expected_category":"account_security","expected_human_review":true,"purpose":"credential preflight; must not call OCI"}
+{"question":"Please refund USD 900 because our usage looks duplicated.","expected_category":"billing","expected_human_review":true,"purpose":"grounded answer plus policy-based human review"}
+{"question":"Can NimbusFlow deploy a Linux desktop agent inside our private data center?","expected_category":"other","expected_human_review":true,"purpose":"unsupported question and uncertainty"}
