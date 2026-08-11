@@ -24,10 +24,13 @@ class QdrantIndex:
             settings.qdrant_api_key.get_secret_value() if settings.qdrant_api_key else None
         )
         if settings.qdrant_path:
+            # Embedded mode is intended for small local tests and performs exact search.
             qdrant_path = settings.qdrant_path.expanduser().resolve()
             qdrant_path.parent.mkdir(parents=True, exist_ok=True)
             self.client = QdrantClient(path=str(qdrant_path))
         else:
+            # Server mode keeps the database local when QDRANT_URL targets localhost and can
+            # use the server's HNSW index for dense approximate-nearest-neighbor search.
             self.client = QdrantClient(
                 url=settings.qdrant_url,
                 api_key=api_key or None,
@@ -67,6 +70,8 @@ class QdrantIndex:
                 },
                 sparse_vectors_config={
                     SPARSE_VECTOR_NAME: models.SparseVectorParams(
+                        # Qdrant applies collection-level inverse-document-frequency statistics
+                        # to the locally generated sparse term vectors.
                         modifier=models.Modifier.IDF,
                     )
                 },
@@ -110,6 +115,8 @@ class QdrantIndex:
         if not documents:
             raise ValueError("Refusing to replace a document with zero chunks")
 
+        # Upload the complete new revision before deleting old points so readers do not see a
+        # document disappear during a successful replacement.
         self.store.add_documents(documents=list(documents), ids=list(ids), batch_size=64)
         stale_filter = models.Filter(
             must=[
@@ -182,6 +189,8 @@ class QdrantIndex:
             k=limit,
             filter=models.Filter(must=conditions),
             search_params=self._search_params(),
+            # RRF combines dense and sparse rank positions without mixing their incompatible
+            # raw score scales.
             hybrid_fusion=models.FusionQuery(fusion=models.Fusion.RRF),
         )
         return [

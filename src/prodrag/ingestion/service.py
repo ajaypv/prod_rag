@@ -12,6 +12,7 @@ from prodrag.ingestion.parsing import DoclingParser, MarkdownSectioner
 from prodrag.models import IngestionResult
 from prodrag.vector_store import QdrantIndex
 
+# A fixed namespace makes every child point ID reproducible for the same document revision.
 _POINT_NAMESPACE = uuid.UUID("b8297a7c-3f58-4e30-bf8a-a33c8f3752bd")
 
 
@@ -87,6 +88,8 @@ class IngestionService:
         for section in sections:
             chunks = self.chunker.chunk(section.text)
             for child_order, child_text in enumerate(chunks):
+                # Including the checksum creates new point IDs when document content changes,
+                # while repeated ingestion of an unchanged revision remains idempotent.
                 point_id = str(
                     uuid.uuid5(
                         _POINT_NAMESPACE,
@@ -108,6 +111,8 @@ class IngestionService:
                     "section": section.heading,
                     "section_order": section.order,
                     "parent_id": section.section_id,
+                    # Parent text is stored with each child so retrieval can expand a precise
+                    # child match back to a coherent section without another document lookup.
                     "parent_text": section.text,
                     "chunk_id": point_id,
                     "chunk_order": child_order,

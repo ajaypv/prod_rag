@@ -64,6 +64,8 @@ class SemanticChunkingStrategy:
         threshold: float = 0.72,
     ) -> None:
         adapter = OCIChonkieEmbeddings(embeddings, dimension)
+        # The sliding sentence window helps the semantic boundary decision without
+        # copying a fixed overlap into every stored child chunk.
         self._chunker = SemanticChunker(
             embedding_model=adapter,
             threshold=threshold,
@@ -77,4 +79,5 @@ class SemanticChunkingStrategy:
     def chunk(self, text: str) -> list[str]:
         chunks = self._chunker.chunk(text)
         output = [chunk.text.strip() for chunk in chunks if chunk.text.strip()]
+        # Preserve non-empty source text if the third-party chunker yields no chunks.
         return output or [text.strip()]

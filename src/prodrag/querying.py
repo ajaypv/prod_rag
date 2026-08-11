@@ -35,6 +35,7 @@ class QueryService:
         try:
             preflight = self.triage.inspect_question(request.question)
         except TriageClassificationError:
+            # Fail closed when the structured safety classification cannot be trusted.
             return QueryResponse(
                 request_id=request_id,
                 category=TicketCategory.OTHER,
@@ -49,6 +50,7 @@ class QueryService:
                 escalation_reasons=[HumanReviewReason.TRIAGE_FAILURE],
             )
         if preflight.sensitive_data_types:
+            # Do not embed or retrieve with a question that contains detected sensitive data.
             return self.answer_service.answer(
                 request.question,
                 [],
@@ -56,6 +58,7 @@ class QueryService:
                 question_triage=preflight,
             )
         if preflight.classification_confidence == ConfidenceLevel.LOW:
+            # Uncertain classification is routed to a person before any retrieval/model answer.
             return QueryResponse(
                 request_id=request_id,
                 category=preflight.category,

@@ -26,6 +26,8 @@ class OCIReranker:
 
         from oci.generative_ai_inference import models
 
+        # Reranking is intentionally limited to the locally retrieved candidate set; sending
+        # the full corpus would increase latency, cost, and unnecessary data exposure.
         response = self.client.rerank_text(
             rerank_text_details=models.RerankTextDetails(
                 input=query,
@@ -39,6 +41,8 @@ class OCIReranker:
         )
         return [
             RetrievedCandidate(
+                # OCI returns the original candidate index, which preserves its document and
+                # hybrid score while attaching the stronger cross-encoder relevance score.
                 document=candidates[item.index].document,
                 hybrid_score=candidates[item.index].hybrid_score,
                 rerank_score=float(item.relevance_score),

@@ -17,12 +17,15 @@ class ParentContextAssembler:
 
         for candidate in candidates:
             parent_id = str(candidate.document.metadata.get("parent_id", ""))
+            # Multiple child chunks can point to one section; retain only its best-ranked hit.
             if parent_id in seen_parents:
                 continue
             seen_parents.add(parent_id)
 
             parent_text = candidate.document.metadata.get("parent_text")
             if parent_text:
+                # Keep the child's scores and citation metadata while giving the answer model
+                # the complete parent section as grounded context.
                 candidate = RetrievedCandidate(
                     document=candidate.document.model_copy(
                         update={"page_content": str(parent_text)}

@@ -37,6 +37,8 @@ def get_embeddings() -> Embeddings:
     from langchain_oci import OCIGenAIEmbeddings
 
     settings = get_settings()
+    # Both encoders use the same model and dimension. Only the task-specific input mode
+    # differs, which is required for asymmetric document/query retrieval embeddings.
     common = {
         "model_id": settings.oci_embed_model,
         "service_endpoint": settings.effective_oci_service_endpoint,
@@ -54,6 +56,7 @@ def get_embeddings() -> Embeddings:
     )
     query_embeddings = OCIGenAIEmbeddings(
         **common,
+        # Reuse the authenticated native client instead of opening a second OCI client.
         client=document_embeddings.client,
         input_type="SEARCH_QUERY",
     )
