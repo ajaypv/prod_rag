@@ -25,6 +25,12 @@ _CITATION_MARKER_RE = re.compile(r"(?:\[|\u3010)\s*(S\d+)\s*(?:\]|\u3011)", re.I
 
 
 class GroundedAnswerService:
+    """Turn retrieved parents into a cited answer or a safe local abstention.
+
+    Retrieval confidence is checked before the answer-model call. After generation, citation
+    IDs are checked against the exact sources supplied in this prompt. Thus an answer without
+    ``[S1]``-style evidence is rejected even if its prose sounds plausible.
+    """
     def __init__(
         self,
         settings: Settings,
@@ -43,6 +49,12 @@ class GroundedAnswerService:
         request_id: str | None = None,
         question_triage: QuestionTriage,
     ) -> QueryResponse:
+        """Apply safety gates, invoke the grounded prompt, and validate cited sources.
+
+        Example: if S1 and S2 are supplied but the model cites only ``[S2]``, the response
+        returns metadata only for S2. If it cites neither, the CLI returns an unanswered result
+        with ``missing_citations`` rather than exposing unsupported prose.
+        """
         request_id = request_id or str(uuid.uuid4())
         if question_triage.sensitive_data_types:
             return QueryResponse(
@@ -100,6 +112,9 @@ class GroundedAnswerService:
                 break
             metadata = candidate.document.metadata
             content = candidate.document.page_content[:remaining]
+            # The 30,000-character default is shared by all sources, not granted to each source.
+            # A later parent can therefore be truncated when earlier higher-ranked parents use
+            # most of the budget; ranking controls which evidence gets priority.
             if not content:
                 continue
             source_id = f"S{len(source_payload) + 1}"
@@ -129,6 +144,8 @@ class GroundedAnswerService:
                 "sources": json.dumps(source_payload, ensure_ascii=False),
             }
         ).strip()
+        # NOT_FOUND is an explicit prompt protocol. It converts model uncertainty into the same
+        # structured human-review path as empty or weak retrieval evidence.
         if raw_answer == "NOT_FOUND" or not raw_answer:
             return QueryResponse(
                 request_id=request_id,

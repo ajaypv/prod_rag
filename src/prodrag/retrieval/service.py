@@ -8,7 +8,11 @@ from prodrag.retrieval.reranking import Reranker
 
 
 class RetrievalService:
-    """Orchestrate hybrid retrieval, reranking, filtering, and parent expansion."""
+    """Orchestrate broad hybrid recall, precise reranking, and context expansion.
+
+    Default funnel: Qdrant dense+sparse+RRF (20 children) -> OCI rerank (up to 10) ->
+    discard scores below 0.15 -> deduplicate and expand (up to 5 parents).
+    """
 
     def __init__(
         self,
@@ -30,6 +34,7 @@ class RetrievalService:
         product: str | None = None,
         version: str | None = None,
     ) -> list[RetrievedCandidate]:
+        """Retrieve evidence inside tenant/product/version boundaries for one question."""
         candidates = self.hybrid_searcher.hybrid_search(
             query,
             tenant_id=tenant_id,
@@ -43,6 +48,7 @@ class RetrievalService:
     def _rerank_and_filter(
         self, query: str, candidates: list[RetrievedCandidate]
     ) -> list[RetrievedCandidate]:
+        """Apply the optional second stage and remove candidates too weak to ground an answer."""
         if self.reranker is None:
             return candidates
 

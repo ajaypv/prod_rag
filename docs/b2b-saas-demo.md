@@ -22,7 +22,7 @@ customer data and do not describe a real product.
 
 Start from the `prodrag` directory and configure `.env` with working OCI credentials. For a test
 that keeps the vector index inside this folder, set `QDRANT_PATH=./data/qdrant`. This embedded
-mode does not require Docker or Redis:
+mode does not require Docker or a separate service:
 
 ```powershell
 Copy-Item .env.example .env
@@ -35,8 +35,8 @@ The eight Markdown samples bypass Docling's optional document-model downloads. T
 parsed locally through Docling and verifies that heading structure and FAQ answers reach the same
 semantic chunking pipeline.
 
-For the API and asynchronous worker, leave `QDRANT_PATH` empty and start the Qdrant and Redis
-services with `docker compose up -d` instead.
+To exercise a local Qdrant server with HNSW, leave `QDRANT_PATH` empty, enable
+`QDRANT_HNSW_ENABLED=true`, and start Qdrant with `docker compose up -d` instead.
 
 Run all ingestion and query examples:
 

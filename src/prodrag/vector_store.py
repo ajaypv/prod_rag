@@ -16,7 +16,12 @@ SPARSE_VECTOR_NAME = "sparse"
 
 
 class QdrantIndex:
-    """Local hybrid index with deterministic, idempotent document replacement."""
+    """Own local Qdrant lifecycle, hybrid search, and revision replacement.
+
+    Embedded ``QDRANT_PATH`` opens an in-process exact index. ``QDRANT_URL`` connects to a local
+    server and can enable HNSW. In both modes dense OCI vectors and local sparse vectors live in
+    Qdrant, and Qdrant performs RRF fusion locally.
+    """
 
     def __init__(self, settings: Settings, embeddings: Embeddings) -> None:
         self.settings = settings
@@ -41,12 +46,14 @@ class QdrantIndex:
         self._store: QdrantVectorStore | None = None
 
     def _hnsw_config(self) -> models.HnswConfigDiff:
+        """Translate CLI settings into Qdrant's dense HNSW construction parameters."""
         return models.HnswConfigDiff(
             m=self.settings.qdrant_hnsw_m,
             ef_construct=self.settings.qdrant_hnsw_ef_construct,
         )
 
     def _search_params(self) -> models.SearchParams | None:
+        """Select embedded exact, server exact, or server HNSW dense search."""
         if self.settings.qdrant_path:
             return None
         if self.settings.qdrant_hnsw_enabled:
@@ -57,6 +64,11 @@ class QdrantIndex:
         return models.SearchParams(exact=True)
 
     def ensure_collection(self) -> None:
+        """Create the dense+sparse collection and attach LangChain's hybrid adapter.
+
+        The collection is tied to its vector width. Changing from 1,536 dimensions requires a
+        new collection and re-ingestion because Qdrant cannot mix incompatible vector sizes.
+        """
         collection_exists = self.client.collection_exists(self.settings.qdrant_collection)
         if not collection_exists:
             self.client.create_collection(
@@ -96,6 +108,7 @@ class QdrantIndex:
 
     @property
     def store(self) -> QdrantVectorStore:
+        """Lazily initialize the collection on the first ingest, query, or delete command."""
         if self._store is None:
             self.ensure_collection()
         assert self._store is not None
@@ -110,6 +123,12 @@ class QdrantIndex:
         checksum: str,
         tenant_id: str,
     ) -> None:
+        """Write a full checksum revision before removing older points.
+
+        Revision B is fully embedded and written while revision A remains searchable. Only after
+        B succeeds does the checksum filter delete A. Repeating B is idempotent because ingestion
+        generated the same point IDs.
+        """
         if len(documents) != len(ids):
             raise ValueError("documents and ids must have identical lengths")
         if not documents:
@@ -140,6 +159,7 @@ class QdrantIndex:
         )
 
     def delete_document(self, document_id: str, *, tenant_id: str) -> None:
+        """Delete one logical document without touching the same ID in another tenant."""
         selector = models.FilterSelector(
             filter=models.Filter(
                 must=[
@@ -167,6 +187,12 @@ class QdrantIndex:
         version: str | None,
         limit: int,
     ) -> list[RetrievedCandidate]:
+        """Fuse semantic and exact-term rankings after applying metadata filters.
+
+        RRF uses positions instead of incomparable raw scales. A child ranked dense #2 and
+        sparse #1 is rewarded for appearing near the top of both lists even though cosine and
+        sparse scores have different meanings.
+        """
         conditions = [
             models.FieldCondition(
                 key="metadata.tenant_id", match=models.MatchValue(value=tenant_id)
@@ -199,5 +225,6 @@ class QdrantIndex:
         ]
 
     def ping(self) -> bool:
+        """Perform a minimal Qdrant round trip for CLI diagnostics."""
         self.client.get_collections()
         return True

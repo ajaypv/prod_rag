@@ -12,7 +12,7 @@ Each automatic query uses:
 - one Cohere Rerank 4 search unit with at most 100 effective documents or chunks, conservatively
   costed below at the published Pro rate
 - 4,000 input tokens and 300 output tokens for `openai.gpt-oss-120b`
-- local Qdrant and Redis, with their compute and storage costs excluded
+- local Qdrant, with its compute and storage costs excluded
 
 Sensitive tickets use only the triage call and stop before embedding, reranking, and answer
 generation. Low-confidence tickets use triage, query embedding, and reranking but stop before

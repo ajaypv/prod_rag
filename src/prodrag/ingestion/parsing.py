@@ -12,15 +12,22 @@ _FIRST_H1_RE = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
 
 
 class UnsupportedDocumentError(ValueError):
+    """The CLI received a file whose suffix is outside ``SUPPORTED_EXTENSIONS``."""
     pass
 
 
 class EmptyDocumentError(ValueError):
+    """Parsing or sectioning produced no searchable text."""
     pass
 
 
 class DoclingParser:
-    """Parse local technical documents without sending their contents to a parser service."""
+    """Normalize a supported local file into Markdown without a parser service.
+
+    Markdown and text take the direct UTF-8 path. PDF, DOCX, PPTX, and HTML lazily construct
+    Docling because those formats need structural conversion. Docling may fetch model assets on
+    the first PDF conversion, but document conversion itself runs on this machine.
+    """
 
     def __init__(self, *, max_file_bytes: int, max_pages: int = 500) -> None:
         self.max_file_bytes = max_file_bytes
@@ -28,6 +35,12 @@ class DoclingParser:
         self._converter = None
 
     def parse(self, source_path: Path) -> ParsedDocument:
+        """Validate, convert, clean, and title one document.
+
+        Example: ``guide.pdf`` becomes one ``ParsedDocument`` whose ``markdown`` contains
+        Docling's headings/tables. Those headings are the input to ``MarkdownSectioner.split``.
+        A maximum page and byte limit prevents a CLI typo from starting an unbounded conversion.
+        """
         source_path = source_path.resolve(strict=True)
         extension = source_path.suffix.lower()
         if extension not in SUPPORTED_EXTENSIONS:
@@ -62,6 +75,7 @@ class DoclingParser:
         )
 
     def _get_converter(self):
+        """Create Docling only for the first rich document and reuse it for later files."""
         if self._converter is None:
             from docling.document_converter import DocumentConverter
 
@@ -71,7 +85,12 @@ class DoclingParser:
 
 
 class MarkdownSectioner:
-    """Create parent sections along Markdown headings before semantic child chunking."""
+    """Create answer-sized parent contexts along the document's heading hierarchy.
+
+    Given ``# Auth`` followed by ``## Rotation``, the nested heading is stored as
+    ``Auth > Rotation``. A 20,000-character section with a 12,000-character limit is split near
+    paragraph boundaries, so every parent remains bounded before child chunking begins.
+    """
 
     def __init__(self, max_parent_chars: int = 12_000) -> None:
         if max_parent_chars < 500:
@@ -79,6 +98,7 @@ class MarkdownSectioner:
         self.max_parent_chars = max_parent_chars
 
     def split(self, markdown: str, *, default_heading: str = "Document") -> list[ParentSection]:
+        """Split normalized Markdown into ordered parents with deterministic section IDs."""
         markdown = markdown.strip()
         if not markdown:
             raise EmptyDocumentError("Cannot section an empty document")
@@ -89,6 +109,9 @@ class MarkdownSectioner:
         buffer: list[str] = []
 
         def flush() -> None:
+            """Append the buffered body under the heading active immediately before it."""
+            # Finish the previous heading body before moving into the next heading. Headings
+            # themselves become metadata rather than being mixed into the preceding section.
             body = "\n".join(buffer).strip()
             if body:
                 raw_sections.append((current_heading, body))
@@ -130,11 +153,15 @@ class MarkdownSectioner:
         return sections
 
     def _split_oversized(self, text: str) -> list[str]:
+        """Prefer paragraph boundaries when a heading body exceeds the parent limit."""
         paragraphs = [part.strip() for part in re.split(r"\n{2,}", text) if part.strip()]
         parts: list[str] = []
         current = ""
 
         def append_piece(piece: str) -> None:
+            """Pack one paragraph into the current bounded parent or begin the next one."""
+            # Accumulate paragraphs until adding one would cross the limit. This preserves
+            # coherent prose better than slicing every parent at exactly max_parent_chars.
             nonlocal current
             candidate = f"{current}\n\n{piece}".strip() if current else piece
             if len(candidate) <= self.max_parent_chars:
@@ -155,6 +182,7 @@ class MarkdownSectioner:
         return parts
 
     def _hard_split(self, text: str) -> list[str]:
+        """Last-resort split for a single oversized paragraph, preferably at whitespace."""
         parts: list[str] = []
         remaining = text.strip()
         while len(remaining) > self.max_parent_chars:

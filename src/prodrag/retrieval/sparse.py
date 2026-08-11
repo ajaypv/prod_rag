@@ -11,16 +11,24 @@ _TOKEN_RE = re.compile(r"[a-z0-9_]+(?:[.-][a-z0-9_]+)*", re.IGNORECASE)
 
 
 class LocalBM25SparseEmbeddings(SparseEmbeddings):
-    """Create deterministic sparse term vectors without downloading a model."""
+    """Build deterministic BM25-style exact-term vectors without a model call.
+
+    Qdrant adds collection-level IDF. This class supplies stable term IDs and local term
+    frequency. For example, ``HTTP 429 retry-after`` retains identifiers that dense semantic
+    search might blur, giving exact technical tokens a second route into the candidate list.
+    """
 
     def embed_documents(self, texts: list[str]) -> list[SparseVector]:
+        """Create sparse document vectors with logarithmically dampened term frequency."""
         return [self._embed(text, use_term_frequency=True) for text in texts]
 
     def embed_query(self, text: str) -> SparseVector:
+        """Create a sparse query vector where each distinct requested term has weight one."""
         return self._embed(text, use_term_frequency=False)
 
     @staticmethod
     def _embed(text: str, *, use_term_frequency: bool) -> SparseVector:
+        """Tokenize, weight, and order dimensions so output is deterministic and testable."""
         counts = Counter(_TOKEN_RE.findall(text.lower()))
         weighted = sorted(
             (
@@ -36,5 +44,6 @@ class LocalBM25SparseEmbeddings(SparseEmbeddings):
 
 
 def _stable_index(token: str) -> int:
+    """Map the same token to the same unsigned 32-bit sparse dimension on every process."""
     digest = hashlib.blake2b(token.encode(), digest_size=4).digest()
     return int.from_bytes(digest, byteorder="big", signed=False)

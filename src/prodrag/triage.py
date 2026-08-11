@@ -12,10 +12,12 @@ from prodrag.prompts import TRIAGE_PROMPT
 
 
 class TriageClassificationError(RuntimeError):
+    """Raised when model output cannot be trusted as the required structured decision."""
     """Raised when the model cannot produce a safe, valid routing decision."""
 
 
 class _TriagePayload(BaseModel):
+    """Private strict schema used to validate the OCI classifier's JSON output."""
     category: TicketCategory
     sensitive_data_types: list[SensitiveDataType] = Field(default_factory=list)
     policy_review_required: bool
@@ -24,6 +26,7 @@ class _TriagePayload(BaseModel):
 
 @dataclass(frozen=True)
 class QuestionTriage:
+    """Validated routing decision passed from triage into querying and answering."""
     category: TicketCategory
     sensitive_data_types: tuple[SensitiveDataType, ...]
     policy_review_required: bool
@@ -31,12 +34,19 @@ class QuestionTriage:
 
 
 class TicketTriageService:
+    """Classify untrusted question text before embedding or retrieval.
+
+    The question is JSON-encoded before insertion into the prompt. This clearly delimits user
+    data and makes quotes/newlines unambiguous; the system prompt still instructs the model to
+    ignore instructions contained inside that data.
+    """
     """Use an LLM to classify a ticket before retrieval."""
 
     def __init__(self, chat_model: BaseChatModel) -> None:
         self._chain = TRIAGE_PROMPT | chat_model | StrOutputParser()
 
     def inspect_question(self, question: str) -> QuestionTriage:
+        """Invoke OCI once, validate its JSON, and return a safe internal classification."""
         try:
             raw_result = self._chain.invoke(
                 {"question_json": json.dumps(question, ensure_ascii=True)}
@@ -58,6 +68,11 @@ class TicketTriageService:
         )
 
 def _extract_json_object(raw_result: str) -> str:
+    """Extract one JSON object when a model adds harmless surrounding prose or fences.
+
+    Example: `````json\n{...}\n``` `` becomes ``{...}``. Missing or inverted braces remain
+    invalid and cause the caller to route the query to human review.
+    """
     start = raw_result.find("{")
     end = raw_result.rfind("}")
     if start < 0 or end < start:

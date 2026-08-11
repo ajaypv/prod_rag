@@ -1,5 +1,7 @@
 from langchain_core.prompts import ChatPromptTemplate
 
+# This prompt is the final model boundary. Code in answering.py independently enforces
+# NOT_FOUND and citation presence, so safety does not depend on the instruction alone.
 ANSWER_PROMPT = ChatPromptTemplate.from_messages(
     [
         (
@@ -18,6 +20,8 @@ Do not invent commands, configuration values, product behavior, or citations."""
     ]
 )
 
+# Triage runs before embeddings. Its strict JSON schema lets triage.py fail closed when the
+# model returns ambiguous text instead of a usable routing decision.
 TRIAGE_PROMPT = ChatPromptTemplate.from_messages(
     [
         (

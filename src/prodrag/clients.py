@@ -9,13 +9,19 @@ from prodrag.config import Settings, get_settings
 
 
 def _require_compartment(settings: Settings) -> str:
+    """Fail early when an OCI operation has no compartment to bill and authorize."""
     if not settings.oci_compartment_id:
         raise RuntimeError("OCI_COMPARTMENT_OCID is required for OCI model calls")
     return settings.oci_compartment_id
 
 
 class OCIQueryDocumentEmbeddings(Embeddings):
-    """Use OCI's asymmetric search modes while sharing one native OCI client."""
+    """Expose OCI's asymmetric embedding modes through LangChain's one interface.
+
+    Cohere Embed uses ``SEARCH_DOCUMENT`` for indexed passages and ``SEARCH_QUERY`` for a
+    question. The model and dimension remain identical, but the input type tells the model
+    which side of the retrieval comparison it is encoding.
+    """
 
     def __init__(self, document_embeddings: Embeddings, query_embeddings: Embeddings) -> None:
         self.document_embeddings = document_embeddings
@@ -23,17 +29,26 @@ class OCIQueryDocumentEmbeddings(Embeddings):
 
     @property
     def client(self):
+        """Expose the shared authenticated OCI SDK client for native reranking."""
         return getattr(self.document_embeddings, "client", None)
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        """Encode stored passages with the OCI ``SEARCH_DOCUMENT`` client."""
         return self.document_embeddings.embed_documents(texts)
 
     def embed_query(self, text: str) -> list[float]:
+        """Encode a customer question with the OCI ``SEARCH_QUERY`` client."""
         return self.query_embeddings.embed_query(text)
 
 
 @lru_cache(maxsize=1)
 def get_embeddings() -> Embeddings:
+    """Create and cache paired OCI document/query embedding clients.
+
+    The returned adapter is shared by semantic chunking and Qdrant. During ingestion Chonkie
+    embeds sentence windows to choose boundaries, then Qdrant embeds the final children for
+    storage. During querying Qdrant calls only ``embed_query``.
+    """
     from langchain_oci import OCIGenAIEmbeddings
 
     settings = get_settings()
@@ -65,6 +80,7 @@ def get_embeddings() -> Embeddings:
 
 @lru_cache(maxsize=1)
 def get_chat_model() -> BaseChatModel:
+    """Create the deterministic OCI chat client shared by triage and answering."""
     from langchain_oci import ChatOCIGenAI
 
     settings = get_settings()
@@ -81,6 +97,7 @@ def get_chat_model() -> BaseChatModel:
 
 
 def get_native_oci_client():
+    """Expose the OCI SDK inference client required by the native rerank operation."""
     embeddings = get_embeddings()
     client = getattr(embeddings, "client", None)
     if client is None:

@@ -9,7 +9,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Environment-only configuration for the RAG API and ingestion worker."""
+    """Load and validate every setting used by the CLI pipeline.
+
+    The CLI never constructs this class directly. ``get_settings()`` reads ``.env`` once,
+    caches the validated object, and the composition functions in ``container.py`` pass that
+    same configuration to ingestion, retrieval, and answering services. For example,
+    ``RAG_CHUNK_SIZE_TOKENS=450`` becomes ``settings.chunk_size_tokens`` and is passed to
+    ``SemanticChunkingStrategy``.
+    """
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -24,13 +31,6 @@ class Settings(BaseSettings):
     )
     log_level: str = Field(default="INFO", validation_alias="RAG_LOG_LEVEL")
     data_dir: Path = Field(default=Path("./data"), validation_alias="RAG_DATA_DIR")
-    admin_api_key: SecretStr | None = Field(
-        default=None, validation_alias="RAG_ADMIN_API_KEY"
-    )
-    query_api_key: SecretStr | None = Field(
-        default=None, validation_alias="RAG_QUERY_API_KEY"
-    )
-
     oci_region: str = Field(default="us-chicago-1", validation_alias="OCI_REGION")
     oci_service_endpoint: str | None = Field(
         default=None, validation_alias="OCI_SERVICE_ENDPOINT"
@@ -75,8 +75,6 @@ class Settings(BaseSettings):
     qdrant_hnsw_ef_search: int = Field(
         default=128, ge=16, le=1024, validation_alias="QDRANT_HNSW_EF_SEARCH"
     )
-    redis_url: str = Field(default="redis://localhost:6379/0", validation_alias="REDIS_URL")
-
     max_file_mb: int = Field(default=25, ge=1, le=200, validation_alias="RAG_MAX_FILE_MB")
     parent_max_chars: int = Field(
         default=12_000, ge=2_000, le=50_000, validation_alias="RAG_PARENT_MAX_CHARS"
@@ -111,24 +109,31 @@ class Settings(BaseSettings):
     context_char_budget: int = Field(
         default=30_000, ge=4_000, le=100_000, validation_alias="RAG_CONTEXT_CHAR_BUDGET"
     )
-    job_ttl_seconds: int = Field(default=604_800, ge=3_600, validation_alias="RAG_JOB_TTL")
-
     @property
     def effective_oci_service_endpoint(self) -> str:
+        """Return an explicit endpoint or derive OCI's regional inference endpoint."""
         return self.oci_service_endpoint or (
             f"https://inference.generativeai.{self.oci_region}.oci.oraclecloud.com"
         )
 
     @property
     def expanded_oci_config_file(self) -> str:
+        """Expand ``~`` before passing the OCI config path to SDK clients."""
         return str(self.oci_config_file.expanduser())
 
     @property
     def max_file_bytes(self) -> int:
+        """Translate the human-friendly MiB limit into the byte limit used by parsers."""
         return self.max_file_mb * 1024 * 1024
 
     @model_validator(mode="after")
     def validate_production_settings(self) -> Settings:
+        """Reject combinations that would make the CLI misleading or unusable.
+
+        Embedded Qdrant is always exact search, so accepting HNSW with ``QDRANT_PATH`` would
+        falsely suggest an approximate graph exists. Production also requires a compartment
+        because OCI embeddings, reranking, triage, and answering all need it.
+        """
         if self.confidence_high_threshold <= self.confidence_medium_threshold:
             raise ValueError(
                 "RAG_CONFIDENCE_HIGH_THRESHOLD must be greater than "
@@ -142,15 +147,8 @@ class Settings(BaseSettings):
         if self.environment != "production":
             return self
 
-        missing: list[str] = []
         if not self.oci_compartment_id:
-            missing.append("OCI_COMPARTMENT_OCID")
-        if not self.admin_api_key or len(self.admin_api_key.get_secret_value()) < 32:
-            missing.append("RAG_ADMIN_API_KEY (at least 32 characters)")
-        if not self.query_api_key or len(self.query_api_key.get_secret_value()) < 32:
-            missing.append("RAG_QUERY_API_KEY (at least 32 characters)")
-        if missing:
-            raise ValueError("Missing production configuration: " + ", ".join(missing))
+            raise ValueError("Missing production configuration: OCI_COMPARTMENT_OCID")
         return self
 
 
@@ -159,4 +157,5 @@ SUPPORTED_EXTENSIONS = frozenset({".pdf", ".docx", ".pptx", ".html", ".htm", ".m
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
+    """Return one validated settings object for the lifetime of this CLI process."""
     return Settings()

@@ -10,6 +10,7 @@ from prodrag.container import get_retrieval_service
 
 
 class EvaluationCase(BaseModel):
+    """One golden question and the document IDs retrieval is expected to return."""
     question: str
     expected_document_ids: list[str] = Field(default_factory=list)
     expected_answerable: bool = True
@@ -19,12 +20,14 @@ class EvaluationCase(BaseModel):
 
     @model_validator(mode="after")
     def validate_labels(self):
+        """Require positive labels for answerable cases so recall remains meaningful."""
         if self.expected_answerable and not self.expected_document_ids:
             raise ValueError("Answerable rows require expected_document_ids")
         return self
 
 
 def load_cases(path: Path) -> list[EvaluationCase]:
+    """Read newline-delimited cases and report the exact bad row on schema failure."""
     cases: list[EvaluationCase] = []
     with path.open(encoding="utf-8") as source:
         for line_number, line in enumerate(source, start=1):
@@ -40,6 +43,12 @@ def load_cases(path: Path) -> list[EvaluationCase]:
 
 
 def evaluate(cases: list[EvaluationCase]) -> dict[str, float | int]:
+    """Run retrieval only and aggregate recall, hit rate, MRR, and abstention.
+
+    Example: expected IDs ``[A, B]`` and retrieved IDs ``[C, A]`` produce recall ``0.5``, a
+    hit, and reciprocal rank ``0.5`` because the first relevant document appears at rank two.
+    Answer generation is intentionally excluded so this command isolates retrieval quality.
+    """
     service = get_retrieval_service()
     recalls: list[float] = []
     reciprocal_ranks: list[float] = []
@@ -86,6 +95,7 @@ def evaluate(cases: list[EvaluationCase]) -> dict[str, float | int]:
 
 
 def main() -> int:
+    """Parse evaluation gates, print metrics, and return nonzero when any gate fails."""
     parser = argparse.ArgumentParser(description="Evaluate prodRAG retrieval against JSONL labels")
     parser.add_argument("dataset", type=Path)
     parser.add_argument("--min-recall", type=float, default=0.95)

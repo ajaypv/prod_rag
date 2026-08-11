@@ -17,6 +17,7 @@ _POINT_NAMESPACE = uuid.UUID("b8297a7c-3f58-4e30-bf8a-a33c8f3752bd")
 
 
 def file_checksum(path: Path) -> str:
+    """Stream a SHA-256 checksum without loading a potentially large document into memory."""
     digest = hashlib.sha256()
     with path.open("rb") as source:
         for block in iter(lambda: source.read(1024 * 1024), b""):
@@ -25,6 +26,12 @@ def file_checksum(path: Path) -> str:
 
 
 class IngestionService:
+    """Run the synchronous file-to-Qdrant pipeline used by ``prodrag ingest``.
+
+    The service intentionally finishes a complete new checksum revision before asking Qdrant to
+    remove stale points. If embedding chunk 19 fails, the previous good revision remains fully
+    searchable instead of being deleted first.
+    """
     def __init__(
         self,
         parser: DoclingParser,
@@ -46,6 +53,12 @@ class IngestionService:
         product: str | None = None,
         version: str | None = None,
     ) -> IngestionResult:
+        """Parse one file, create searchable children, and atomically replace its revision.
+
+        Each Qdrant point stores a focused child as ``page_content`` and its full parent in
+        metadata. For example, search may match a 450-token "rotation steps" child, while answer
+        generation later expands it to the complete "API token rotation" parent.
+        """
         checksum = file_checksum(source_path)
         parsed = self.parser.parse(source_path)
         sections = self.sectioner.split(parsed.markdown, default_heading=parsed.title)
@@ -83,6 +96,11 @@ class IngestionService:
         product: str | None,
         version: str | None,
     ) -> tuple[list[Document], list[str]]:
+        """Convert parent sections into Qdrant children and matching deterministic IDs.
+
+        The child text is the dense/sparse search unit. Its metadata carries the complete parent,
+        filters, checksum, and citation fields used later by retrieval and answering.
+        """
         documents: list[Document] = []
         point_ids: list[str] = []
         for section in sections:
@@ -96,6 +114,8 @@ class IngestionService:
                         f"{tenant_id}:{document_id}:{checksum}:{section.section_id}:{child_order}",
                     )
                 )
+                # UUID5 makes identical inputs produce identical point IDs. Retrying the same
+                # revision therefore updates the same logical points rather than duplicating them.
                 index_text = (
                     f"Document: {parsed.title}\n"
                     f"Section: {section.heading}\n\n"

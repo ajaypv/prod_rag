@@ -16,7 +16,16 @@ from prodrag.triage import TicketTriageService, TriageClassificationError
 
 
 class QueryService:
-    """Run local preflight checks before retrieval and answer generation."""
+    """Orchestrate the command behind ``prodrag query`` from safety to answer.
+
+    Normal flow::
+
+        question -> OCI triage -> hybrid retrieval -> OCI rerank -> confidence gate
+                 -> OCI grounded answer -> citation validation -> JSON response
+
+    Sensitive, uncertain, or malformed triage results stop before the query is embedded. This
+    is both a privacy boundary and a fail-closed safety decision.
+    """
 
     def __init__(
         self,
@@ -31,6 +40,11 @@ class QueryService:
     def query(
         self, request: QueryRequest, *, request_id: str | None = None
     ) -> QueryResponse:
+        """Run one query and preserve a request ID across every possible exit path.
+
+        ``product`` and ``version`` are retrieval filters, not words appended to the question.
+        This prevents a result from another product/version from entering the candidate pool.
+        """
         request_id = request_id or str(uuid.uuid4())
         try:
             preflight = self.triage.inspect_question(request.question)

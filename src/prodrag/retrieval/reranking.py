@@ -5,13 +5,21 @@ from prodrag.domain import RetrievedCandidate
 
 
 class Reranker(Protocol):
+    """Second-stage relevance contract used by the retrieval orchestrator."""
     def rerank(
         self, query: str, candidates: Sequence[RetrievedCandidate], *, top_n: int
-    ) -> list[RetrievedCandidate]: ...
+    ) -> list[RetrievedCandidate]:
+        """Return at most ``top_n`` candidates ordered by query-to-passage relevance."""
+        ...
 
 
 class OCIReranker:
-    """Reorder hybrid candidates using an OCI on-demand rerank model."""
+    """Reorder hybrid candidates using an OCI on-demand rerank model.
+
+    RRF is broad but only knows rank positions. Reranking reads query and passage text. Two
+    chunks mentioning "token" may rank similarly in Qdrant, while the chunk specifically about
+    token *rotation* receives the higher cross-encoder relevance score.
+    """
 
     def __init__(self, client, *, compartment_id: str, model_id: str) -> None:
         self.client = client
@@ -21,6 +29,7 @@ class OCIReranker:
     def rerank(
         self, query: str, candidates: Sequence[RetrievedCandidate], *, top_n: int
     ) -> list[RetrievedCandidate]:
+        """Send candidate text once, then map OCI result indexes back to source metadata."""
         if not candidates:
             return []
 

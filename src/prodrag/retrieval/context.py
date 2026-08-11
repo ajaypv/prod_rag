@@ -4,7 +4,12 @@ from prodrag.domain import RetrievedCandidate
 
 
 class ParentContextAssembler:
-    """Deduplicate child matches and expand each winner to its parent section."""
+    """Deduplicate child matches and expand each winner to its parent section.
+
+    Three high-scoring children from ``Authentication > Token rotation`` count as one final
+    context. The first/highest-ranked child fixes its position and ``parent_text`` supplies the
+    complete evidence passed to answer generation.
+    """
 
     def __init__(self, *, limit: int) -> None:
         self.limit = limit
@@ -12,6 +17,7 @@ class ParentContextAssembler:
     def assemble(
         self, candidates: Sequence[RetrievedCandidate]
     ) -> list[RetrievedCandidate]:
+        """Return at most ``limit`` unique parents while preserving relevance order."""
         contexts: list[RetrievedCandidate] = []
         seen_parents: set[str] = set()
 
