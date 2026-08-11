@@ -27,7 +27,13 @@ def get_index() -> QdrantIndex:
 def get_ingestion_service() -> IngestionService:
     settings = get_settings()
     return IngestionService(
-        parser=DoclingParser(max_file_bytes=settings.max_file_bytes),
+        parser=DoclingParser(
+            max_file_bytes=settings.max_file_bytes,
+            max_pages=settings.max_pdf_pages,
+            pdf_ocr_enabled=settings.pdf_ocr_enabled,
+            pdf_table_structure_enabled=settings.pdf_table_structure_enabled,
+            pdf_force_backend_text=settings.pdf_force_backend_text,
+        ),
         sectioner=MarkdownSectioner(settings.parent_max_chars),
         chunker=SemanticChunkingStrategy(
             get_embeddings(),
@@ -61,7 +67,9 @@ def get_retrieval_service() -> RetrievalService:
 
 @lru_cache(maxsize=1)
 def get_triage_service() -> TicketTriageService:
-    return TicketTriageService(get_chat_model())
+    return TicketTriageService(
+        get_chat_model(), retry_attempts=get_settings().model_retry_attempts
+    )
 
 
 @lru_cache(maxsize=1)

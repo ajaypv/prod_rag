@@ -13,19 +13,21 @@ types. An OCI LLM performs structured safety triage before retrieval. Sensitive 
 after triage and are routed to the secure customer-support queue without embedding, reranking,
 or automatic answer generation.
 
-See [B2B SaaS support demo](docs/b2b-saas-demo.md) for the test flow and
-[OCI cost estimate](docs/cost-estimate.md) for assumptions and the per-1,000-query calculation.
+See [B2B SaaS support demo](docs/b2b-saas-demo.md) for the test flow,
+[OCI cost estimate](docs/cost-estimate.md) for the per-1,000-query calculation, and
+[production readiness status](docs/production-readiness.md) for completed checks and deployment
+blockers.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
     U["Upload API"] --> R["Redis / Dramatiq queue"]
-    R --> D["Docling local parser"]
+    R --> D["Local parser: native PDF text or Docling"]
     D --> S["Heading-aware parent sections"]
     S --> C["Chonkie semantic child chunks"]
     C --> E["OCI Embed 4 via LangChain"]
-    E --> Q["Local Qdrant: dense + sparse RRF"]
+    E --> Q["Local Qdrant: dense + BM25 RRF"]
     X["Customer query"] --> T["OCI LLM safety triage"]
     T -->|"safe with medium or high confidence"| Q
     T -->|"sensitive, low-confidence, or invalid"| H["Customer-support review"]
@@ -47,7 +49,7 @@ Each module has one main responsibility:
 - `ingestion/chunking.py` creates semantic child chunks inside each parent.
 - `ingestion/service.py` builds deterministic metadata and upserts document revisions.
 - `retrieval/hybrid_search.py` defines the dense-and-sparse search contract.
-- `retrieval/sparse.py` supplies local BM25 sparse embeddings.
+- `retrieval/sparse.py` configures local FastEmbed `Qdrant/bm25` sparse embeddings.
 - `retrieval/reranking.py` contains the OCI reranker adapter.
 - `retrieval/context.py` deduplicates children and expands winning parent sections.
 - `retrieval/confidence.py` grades retrieval confidence independently from the LLM.
@@ -64,7 +66,8 @@ Each module has one main responsibility:
 - [LangChain OCI](https://docs.langchain.com/oss/python/integrations/providers/oci) provides
   reusable OCI chat and embedding clients. They are singletons in this service.
 - [Qdrant + LangChain](https://qdrant.tech/documentation/frameworks/langchain/) provides
-  local dense, sparse, and hybrid retrieval with explicit RRF fusion.
+  local dense, BM25 sparse, and hybrid retrieval with explicit RRF fusion. FastEmbed runs BM25
+  locally using the packaged English stopword asset, without a runtime model download.
 - [Dramatiq](https://dramatiq.io/guide.html) gives the ingestion path durable Redis queues,
   automatic retries, exponential backoff, and a dead-letter queue.
 
@@ -79,16 +82,23 @@ For a self-hosted local Qdrant server with HNSW, keep Qdrant on `localhost` and 
 ```dotenv
 QDRANT_URL=http://localhost:6333
 QDRANT_PATH=
+QDRANT_COLLECTION=technical_support_v2
 QDRANT_HNSW_ENABLED=true
 QDRANT_HNSW_M=16
 QDRANT_HNSW_EF_CONSTRUCT=128
 QDRANT_HNSW_EF_SEARCH=128
+RAG_BM25_MODEL=Qdrant/bm25
+RAG_BM25_LANGUAGE=english
 ```
 
 Qdrant builds and maintains the dense HNSW graph as ingestion upserts points. At query time,
 `QDRANT_HNSW_ENABLED=true` selects approximate HNSW search with `hnsw_ef`; the sparse BM25
-results are still fused with dense results using RRF. The application rejects HNSW plus
+results use Qdrant's sparse index and are fused with dense results using RRF. The application rejects HNSW plus
 `QDRANT_PATH` so embedded exact search cannot be mistaken for HNSW.
+
+Changing the BM25 model, language, tokenizer behavior, or sparse-vector implementation requires a
+new collection and full reingestion. Do not mix the former term-frequency vectors from
+`technical_support_v1` with FastEmbed BM25 vectors in `technical_support_v2`.
 
 ## Accuracy target
 
@@ -102,8 +112,8 @@ controls needed to reach and verify that target on your data:
    before answer generation, then retains up to 5 parent contexts.
 5. When reranking is enabled, low rerank scores cause an abstention instead of an unsupported
    answer.
-6. `prodrag-eval` fails CI if labeled production questions fall below the configured recall
-   and hit-rate thresholds.
+6. `prodrag-eval` reports document-level recall and precision, and fails CI when configured
+   recall, precision, hit-rate, or abstention thresholds are missed.
 
 Build an evaluation set from real support questions. Include answerable questions, exact
 error codes, acronyms, version-specific questions, and unanswerable questions. Start with at
@@ -115,7 +125,17 @@ Requirements: Python 3.13, `uv`, and OCI credentials and policies for Generative
 Desktop is required only for the API and asynchronous-worker setup.
 
 Choose one of these local setups after copying `.env.example` to `.env` and filling in the OCI
-configuration. Keep API keys secret; production requires separate values of at least 32 characters.
+configuration. Keep API keys secret. Development can use the legacy global keys. Production
+requires tenant-bound admin and query key maps whose values contain at least 32 characters:
+
+```dotenv
+RAG_TENANT_ADMIN_API_KEYS={"default":"replace-with-a-32-character-admin-key"}
+RAG_TENANT_QUERY_API_KEYS={"default":"replace-with-a-32-character-query-key"}
+```
+
+Each key authorizes only its mapped tenant, even if a request supplies a different `tenant_id`.
+Use different values for the admin and query roles. Put the maps in a secret manager rather than
+committing them to source control.
 
 ### Option A: embedded index for synchronous CLI testing
 
@@ -145,9 +165,27 @@ $env:UV_CACHE_DIR = (Join-Path (Get-Location) '.uv-cache')
 uv sync
 ```
 
-The Markdown and HTML demo corpus needs no local model download. Docling may download model assets when it
-first parses PDF, DOCX, or PPTX files. Bake or prefetch those assets in the production image so
-workers do not need internet access at startup.
+The Markdown and HTML demo corpus needs no local model download. PDF ingestion defaults to native
+text extraction with OCR and table reconstruction disabled; this is faster and more reliable for
+digitally generated technical manuals. For scanned PDFs, set `RAG_PDF_OCR_ENABLED=true` and
+`RAG_PDF_FORCE_BACKEND_TEXT=false`. Enable `RAG_PDF_TABLE_STRUCTURE_ENABLED=true` only when table
+layout is important to retrieval. OCR, table reconstruction, DOCX, and PPTX processing may download
+model assets. Bake or prefetch those assets in the production image so workers do not need internet
+access at startup.
+
+`RAG_MAX_PDF_PAGES=200` limits each PDF ingestion job to 200 pages. Documents above the limit are
+rejected; split them into smaller, versioned documents before ingestion.
+
+Production also requires upload scanning. Configure a command as a JSON argument list; `{path}` is
+replaced with the temporary upload path. For example, with ClamAV installed:
+
+```dotenv
+RAG_UPLOAD_SCAN_COMMAND=["clamscan","--no-summary","{path}"]
+```
+
+If an upstream gateway already scans every upload, set `RAG_UPLOADS_PREVALIDATED=true` instead.
+Successful uploads and files whose retries are exhausted are removed from the temporary upload
+directory.
 
 Start the API and worker in separate terminals:
 
@@ -209,7 +247,7 @@ for rates and formulas.
 Upload returns `202 Accepted`; poll the returned job ID until it succeeds.
 
 ```powershell
-$headers = @{ 'X-Admin-Key' = '<RAG_ADMIN_API_KEY>' }
+$headers = @{ 'X-Admin-Key' = '<tenant-admin-key>' }
 $form = @{
   file = Get-Item 'C:\path\to\guide.pdf'
   document_id = 'authentication-guide'
@@ -232,7 +270,7 @@ do {
 ```
 
 ```powershell
-$headers = @{ 'X-API-Key' = '<RAG_QUERY_API_KEY>' }
+$headers = @{ 'X-API-Key' = '<tenant-query-key>' }
 $body = @{
   question = 'How do I rotate an API token?'
   tenant_id = 'default'
@@ -250,32 +288,66 @@ Endpoints:
   `tenant_id` query parameter defaults to `default`
 - `POST /v1/query` — authenticated retrieval and grounded answer
 - `GET /healthz` and `GET /readyz` — liveness and dependency readiness
+- `GET /metrics` — Prometheus request counters and latency histogram buckets for p95 alerts
 
 ## Retrieval evaluation
 
-Create JSONL rows using the schema in `eval/example.jsonl`, then run:
+Create JSONL rows using the schema in `eval/example.jsonl`. This command gates retrieval quality:
 
 ```powershell
-uv run prodrag-eval .\eval\customer-questions.jsonl --min-recall 0.95 --min-hit-rate 0.95 --min-abstention 0.90
+uv run prodrag-eval .\eval\customer-questions.jsonl `
+  --min-recall 0.95 --min-precision 0.30 --min-hit-rate 0.95
 ```
 
 Use the lowercase command `prodrag-eval` on case-sensitive hosts. The command exits nonzero
-when the gate fails. Tune in this order: metadata labels/filters, parsing errors, parent size,
-semantic threshold, candidate count, reranker choice, and only then the chat prompt/model.
+when a configured gate fails. `mean_recall` is the fraction of expected document IDs returned;
+`mean_precision` is the fraction of unique returned document IDs that are expected, averaged over
+answerable questions. `empty_retrieval_rate` reports how often unanswerable questions retrieve no
+context, but it is not an answer-level abstention measurement. Precision gating is disabled by
+default (`--min-precision 0`) so teams can set a target that matches the number of expected sources
+per question.
+
+The checked-in `eval/salesforce-streaming-api.jsonl` dataset contains golden questions, expected
+answers for human review, expected document IDs for automated recall/precision scoring, and negative
+questions for abstention testing against the ingested Streaming API guide.
+
+Use `--end-to-end` to call triage, retrieval, answer generation, and citation validation. This mode
+measures actual abstention, answerability, citation coverage, and whether citations point to an
+expected document:
+
+```powershell
+uv run prodrag-eval .\eval\customer-questions.jsonl --end-to-end `
+  --min-recall 0.95 --min-precision 0.30 --min-hit-rate 0.95 `
+  --min-answerability 0.95 --min-citation-hit-rate 0.95 --min-abstention 0.90
+```
+
+The end-to-end run makes OCI model calls and therefore incurs usage charges. Tune in this order:
+metadata labels/filters, parsing errors, parent size, semantic threshold, candidate count,
+reranker choice, and only then the chat prompt/model.
+
+Add optional `expected_category` and `expected_human_review` fields to JSONL rows to measure triage
+and routing accuracy. Those metrics return `null` when the dataset contains no corresponding labels.
+Evaluation output also includes `retrieval_p95_ms` and, in end-to-end mode,
+`end_to_end_p95_ms`.
 
 ## Production checklist
 
 - Run Qdrant and Redis on persistent encrypted volumes with backups and resource limits.
 - Keep Qdrant/Redis on a private network; the compose file binds them to loopback for local use.
-- Put the API behind your identity-aware gateway, TLS, rate limits, and request-size limits.
+- Put the API behind TLS and rate limits. Tenant-bound service keys enforce application-level
+  isolation; use your identity-aware gateway when end-user identity or OAuth is required.
 - Store API keys and OCI configuration in your secret manager; never commit `.env`.
-- Scan uploads for malware and archive the source documents according to retention policy.
+- Configure `RAG_UPLOAD_SCAN_COMMAND`, or attest to upstream scanning with
+  `RAG_UPLOADS_PREVALIDATED=true`. Archive source documents outside this temporary upload path if
+  retention policy requires it.
 - Run at least two API replicas. Scale ingestion workers separately; start with one worker for
   this small corpus to avoid unnecessary OCI bursts.
 - Alert on failed/retrying jobs, retrieval abstention rate, p95 latency, OCI errors, and Qdrant
   availability. Do not log document bodies, prompts, credentials, or customer PII.
-- Version collections (`technical_support_v1`, `v2`) when the embedding model or dimension
-  changes. Never mix vectors produced by different embedding configurations.
+- Scrape `/metrics` from every API replica and collect the JSON request logs. Configure
+  `RAG_QUERY_TIMEOUT_SECONDS` and `RAG_MODEL_RETRY_ATTEMPTS` for the deployment latency budget.
+- Version collections when the dense or sparse embedding configuration changes. Never mix vectors
+  produced by different embedding or BM25 configurations.
 - Re-run the labeled evaluation gate for every document, chunking, embedding, or prompt change.
 - Connect responses with `routing_destination: customer_support` to the ticketing platform used
   by the support team. The reference service makes the routing decision but does not create an

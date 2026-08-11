@@ -5,6 +5,21 @@ import pytest
 from prodrag.ingestion.parsing import DoclingParser, EmptyDocumentError, MarkdownSectioner
 
 
+def test_pdf_parser_defaults_to_native_text_without_ocr() -> None:
+    parser = DoclingParser(max_file_bytes=10_000)
+
+    assert parser.pdf_ocr_enabled is False
+    assert parser.pdf_table_structure_enabled is False
+    assert parser.pdf_force_backend_text is True
+    assert parser._use_native_pdf_extraction() is True
+
+
+def test_pdf_parser_uses_docling_when_ocr_is_enabled() -> None:
+    parser = DoclingParser(max_file_bytes=10_000, pdf_ocr_enabled=True)
+
+    assert parser._use_native_pdf_extraction() is False
+
+
 def test_markdown_sectioner_preserves_heading_hierarchy_and_content() -> None:
     markdown = """# Product Guide
 
@@ -53,4 +68,3 @@ def test_parser_reads_markdown_without_docling(tmp_path: Path) -> None:
 
     assert parsed.title == "FAQ"
     assert parsed.metadata["source_name"] == "faq.md"
-

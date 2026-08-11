@@ -22,9 +22,20 @@ class EmptyDocumentError(ValueError):
 class DoclingParser:
     """Parse local technical documents without sending their contents to a parser service."""
 
-    def __init__(self, *, max_file_bytes: int, max_pages: int = 500) -> None:
+    def __init__(
+        self,
+        *,
+        max_file_bytes: int,
+        max_pages: int = 500,
+        pdf_ocr_enabled: bool = False,
+        pdf_table_structure_enabled: bool = False,
+        pdf_force_backend_text: bool = True,
+    ) -> None:
         self.max_file_bytes = max_file_bytes
         self.max_pages = max_pages
+        self.pdf_ocr_enabled = pdf_ocr_enabled
+        self.pdf_table_structure_enabled = pdf_table_structure_enabled
+        self.pdf_force_backend_text = pdf_force_backend_text
         self._converter = None
 
     def parse(self, source_path: Path) -> ParsedDocument:
@@ -37,6 +48,8 @@ class DoclingParser:
 
         if extension in {".md", ".txt"}:
             markdown = source_path.read_text(encoding="utf-8", errors="replace")
+        elif extension == ".pdf" and self._use_native_pdf_extraction():
+            markdown = self._extract_native_pdf_text(source_path)
         else:
             converter = self._get_converter()
             result = next(
@@ -61,12 +74,57 @@ class DoclingParser:
             metadata={"source_name": source_path.name, "extension": extension},
         )
 
+    def _use_native_pdf_extraction(self) -> bool:
+        return (
+            self.pdf_force_backend_text
+            and not self.pdf_ocr_enabled
+            and not self.pdf_table_structure_enabled
+        )
+
+    def _extract_native_pdf_text(self, source_path: Path) -> str:
+        import pypdfium2 as pdfium
+
+        document = pdfium.PdfDocument(source_path)
+        try:
+            page_count = len(document)
+            if page_count > self.max_pages:
+                raise ValueError(
+                    f"Document exceeds the {self.max_pages}-page ingestion limit"
+                )
+            pages: list[str] = []
+            for page_number in range(page_count):
+                page = document[page_number]
+                try:
+                    text_page = page.get_textpage()
+                    try:
+                        text = text_page.get_text_range().strip()
+                    finally:
+                        text_page.close()
+                finally:
+                    page.close()
+                if text:
+                    pages.append(f"## Page {page_number + 1}\n\n{text}")
+            return "\n\n".join(pages)
+        finally:
+            document.close()
+
     def _get_converter(self):
         if self._converter is None:
-            from docling.document_converter import DocumentConverter
+            from docling.datamodel.base_models import InputFormat
+            from docling.datamodel.pipeline_options import PdfPipelineOptions
+            from docling.document_converter import DocumentConverter, PdfFormatOption
 
             # Docling keeps remote model services disabled by default. Do not enable them here.
-            self._converter = DocumentConverter()
+            pdf_options = PdfPipelineOptions(
+                do_ocr=self.pdf_ocr_enabled,
+                do_table_structure=self.pdf_table_structure_enabled,
+                force_backend_text=self.pdf_force_backend_text,
+            )
+            self._converter = DocumentConverter(
+                format_options={
+                    InputFormat.PDF: PdfFormatOption(pipeline_options=pdf_options)
+                }
+            )
         return self._converter
 
 

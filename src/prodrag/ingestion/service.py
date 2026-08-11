@@ -111,6 +111,8 @@ class IngestionService:
                     "parent_text": section.text,
                     "chunk_id": point_id,
                     "chunk_order": child_order,
+                    # Qdrant search excludes this revision until every chunk is uploaded.
+                    "revision_ready": False,
                 }
                 if product:
                     metadata["product"] = product

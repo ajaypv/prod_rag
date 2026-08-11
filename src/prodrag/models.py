@@ -99,6 +99,7 @@ class JobStatus(BaseModel):
     job_id: str
     state: JobState
     document_id: str
+    tenant_id: str = "default"
     message: str | None = None
     result: IngestionResult | None = None
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

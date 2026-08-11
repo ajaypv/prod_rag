@@ -1,2 +1,1 @@
-{"question":"How do I rotate an API token?","expected_document_ids":["authentication-guide"],"tenant_id":"default","product":"example-product","version":"1.0"}
-
+{"question":"How do I rotate an API token?","expected_document_ids":["authentication-guide"],"expected_answerable":true,"expected_category":"account_security","expected_human_review":false,"tenant_id":"default","product":"example-product","version":"1.0"}

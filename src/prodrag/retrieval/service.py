@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import logging
+import time
+import uuid
+
 from prodrag.config import Settings
 from prodrag.domain import RetrievedCandidate
 from prodrag.retrieval.context import ParentContextAssembler
 from prodrag.retrieval.hybrid_search import HybridSearcher
 from prodrag.retrieval.reranking import Reranker
+
+logger = logging.getLogger("prodrag.retrieval")
 
 
 class RetrievalService:
@@ -29,7 +35,10 @@ class RetrievalService:
         tenant_id: str,
         product: str | None = None,
         version: str | None = None,
+        request_id: str | None = None,
     ) -> list[RetrievedCandidate]:
+        request_id = request_id or str(uuid.uuid4())
+        started = time.perf_counter()
         candidates = self.hybrid_searcher.hybrid_search(
             query,
             tenant_id=tenant_id,
@@ -38,7 +47,20 @@ class RetrievalService:
             limit=self.settings.retrieval_candidates,
         )
         candidates = self._rerank_and_filter(query, candidates)
-        return self.context_assembler.assemble(candidates)
+        contexts = self.context_assembler.assemble(candidates)
+        logger.info(
+            "retrieval_completed",
+            extra={
+                "request_id": request_id,
+                "tenant_id": tenant_id,
+                "product": product,
+                "version": version,
+                "candidate_count": len(contexts),
+                "retrieval_scores": [round(item.final_score, 6) for item in contexts],
+                "duration_ms": round((time.perf_counter() - started) * 1_000, 3),
+            },
+        )
+        return contexts
 
     def _rerank_and_filter(
         self, query: str, candidates: list[RetrievedCandidate]

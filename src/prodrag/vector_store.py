@@ -9,7 +9,7 @@ from qdrant_client import QdrantClient, models
 
 from prodrag.config import Settings
 from prodrag.domain import RetrievedCandidate
-from prodrag.retrieval.sparse import LocalBM25SparseEmbeddings
+from prodrag.retrieval.sparse import create_local_bm25_sparse_embeddings
 
 DENSE_VECTOR_NAME = "dense"
 SPARSE_VECTOR_NAME = "sparse"
@@ -33,7 +33,10 @@ class QdrantIndex:
                 api_key=api_key or None,
                 timeout=30,
             )
-        self.sparse_embeddings = LocalBM25SparseEmbeddings()
+        self.sparse_embeddings = create_local_bm25_sparse_embeddings(
+            model_name=settings.bm25_model,
+            language=settings.bm25_language,
+        )
         self.embeddings = embeddings
         self._store: QdrantVectorStore | None = None
 
@@ -111,6 +114,13 @@ class QdrantIndex:
             raise ValueError("Refusing to replace a document with zero chunks")
 
         self.store.add_documents(documents=list(documents), ids=list(ids), batch_size=64)
+        self.client.set_payload(
+            collection_name=self.settings.qdrant_collection,
+            payload={"revision_ready": True},
+            key="metadata",
+            points=list(ids),
+            wait=True,
+        )
         stale_filter = models.Filter(
             must=[
                 models.FieldCondition(
@@ -163,7 +173,20 @@ class QdrantIndex:
         conditions = [
             models.FieldCondition(
                 key="metadata.tenant_id", match=models.MatchValue(value=tenant_id)
-            )
+            ),
+            # Existing indexes created before revision gating have no flag and remain readable.
+            # Newly uploaded revisions start with false and are hidden until the full upsert ends.
+            models.Filter(
+                should=[
+                    models.FieldCondition(
+                        key="metadata.revision_ready",
+                        match=models.MatchValue(value=True),
+                    ),
+                    models.IsEmptyCondition(
+                        is_empty=models.PayloadField(key="metadata.revision_ready")
+                    ),
+                ]
+            ),
         ]
         if product:
             conditions.append(

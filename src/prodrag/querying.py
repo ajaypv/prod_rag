@@ -75,6 +75,7 @@ class QueryService:
             tenant_id=request.tenant_id,
             product=request.product,
             version=request.version,
+            request_id=request_id,
         )
         return self.answer_service.answer(
             request.question,

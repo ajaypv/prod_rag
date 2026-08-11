@@ -1,14 +1,26 @@
-from prodrag.retrieval.sparse import LocalBM25SparseEmbeddings
+from prodrag.retrieval.sparse import create_local_bm25_sparse_embeddings
 
 
-def test_local_sparse_embeddings_are_deterministic_and_weight_repeated_terms() -> None:
-    embeddings = LocalBM25SparseEmbeddings()
+def test_local_bm25_uses_configured_model_language_and_cache(monkeypatch, tmp_path) -> None:
+    captured = {}
+    (tmp_path / "english.txt").write_text("the\nand\n", encoding="utf-8")
 
-    first = embeddings.embed_documents(["HTTP 429 retry retry"])[0]
-    second = embeddings.embed_documents(["HTTP 429 retry retry"])[0]
-    query = embeddings.embed_query("HTTP 429 retry")
+    class FakeFastEmbedSparse:
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
 
-    assert first == second
-    assert len(first.indices) == len(set(first.indices)) == 3
-    assert max(first.values) > 1.0
-    assert set(query.values) == {1.0}
+    monkeypatch.setattr("prodrag.retrieval.sparse.FastEmbedSparse", FakeFastEmbedSparse)
+
+    result = create_local_bm25_sparse_embeddings(
+        model_name="Qdrant/bm25",
+        language="english",
+        model_assets_dir=tmp_path,
+    )
+
+    assert isinstance(result, FakeFastEmbedSparse)
+    assert captured == {
+        "model_name": "Qdrant/bm25",
+        "language": "english",
+        "specific_model_path": str(tmp_path),
+        "local_files_only": True,
+    }

@@ -33,19 +33,25 @@ class QuestionTriage:
 class TicketTriageService:
     """Use an LLM to classify a ticket before retrieval."""
 
-    def __init__(self, chat_model: BaseChatModel) -> None:
+    def __init__(self, chat_model: BaseChatModel, *, retry_attempts: int = 3) -> None:
         self._chain = TRIAGE_PROMPT | chat_model | StrOutputParser()
+        self.retry_attempts = retry_attempts
 
     def inspect_question(self, question: str) -> QuestionTriage:
-        try:
-            raw_result = self._chain.invoke(
-                {"question_json": json.dumps(question, ensure_ascii=True)}
-            ).strip()
-            payload = _TriagePayload.model_validate_json(_extract_json_object(raw_result))
-        except Exception as exc:
+        last_error: Exception | None = None
+        for _ in range(self.retry_attempts):
+            try:
+                raw_result = self._chain.invoke(
+                    {"question_json": json.dumps(question, ensure_ascii=True)}
+                ).strip()
+                payload = _TriagePayload.model_validate_json(_extract_json_object(raw_result))
+                break
+            except Exception as exc:
+                last_error = exc
+        else:
             raise TriageClassificationError(
                 "The LLM triage response was unavailable or invalid"
-            ) from exc
+            ) from last_error
 
         sensitive_types = tuple(
             sorted(set(payload.sensitive_data_types), key=lambda item: item.value)
@@ -56,6 +62,7 @@ class TicketTriageService:
             policy_review_required=payload.policy_review_required,
             classification_confidence=payload.classification_confidence,
         )
+
 
 def _extract_json_object(raw_result: str) -> str:
     start = raw_result.find("{")

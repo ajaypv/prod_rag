@@ -30,7 +30,9 @@ $env:UV_CACHE_DIR = (Join-Path (Get-Location) '.uv-cache')
 uv sync
 ```
 
-The sparse exact-term encoder is implemented locally and does not download a Hugging Face model.
+FastEmbed generates genuine `Qdrant/bm25` sparse vectors locally. The application packages the
+English stopword asset and runs FastEmbed in local-files-only mode, so startup does not download a
+BM25 model.
 The eight Markdown samples bypass Docling's optional document-model downloads. The HTML FAQ is
 parsed locally through Docling and verifies that heading structure and FAQ answers reach the same
 semantic chunking pipeline.
@@ -132,8 +134,13 @@ escalation, and unsupported questions:
 
 ```powershell
 uv run prodrag-eval .\eval\b2b-saas.jsonl `
-  --min-recall 0.95 --min-hit-rate 0.95 --min-abstention 0.90
+  --min-recall 0.95 --min-precision 0.30 --min-hit-rate 0.95
 ```
+
+The `0.30` precision gate records the current five-context demo baseline. Raise it only after
+tuning and checking recall. To test final answers and real abstention, add `--end-to-end` plus
+`--min-answerability`, `--min-citation-hit-rate`, and `--min-abstention`. End-to-end evaluation
+makes OCI model calls.
 
 Do not treat a passing sample set as proof of production accuracy. Add anonymized real support
 questions, review incorrect results, and tune thresholds before enabling automatic replies.

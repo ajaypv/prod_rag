@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -9,10 +10,22 @@ from dramatiq.brokers.redis import RedisBroker
 from prodrag.config import get_settings
 from prodrag.container import get_ingestion_service, get_job_store
 from prodrag.models import JobState, JobStatus
+from prodrag.observability import configure_logging
 
 settings = get_settings()
+configure_logging(settings.log_level)
 broker = RedisBroker(url=settings.redis_url)
 dramatiq.set_broker(broker)
+
+
+def _cleanup_upload(source_path: str) -> None:
+    upload_root = (settings.data_dir / "uploads").resolve()
+    source = Path(source_path).resolve()
+    if not source.is_relative_to(upload_root):
+        return
+    source.unlink(missing_ok=True)
+    with suppress(OSError):
+        source.parent.rmdir()
 
 
 @dramatiq.actor(actor_name="mark_ingestion_failed", queue_name="ingestion")
@@ -29,6 +42,7 @@ def mark_ingestion_failed(message_data: dict, retry_metadata: dict) -> None:
             job_id=job_id,
             state=JobState.FAILED,
             document_id=document_id,
+            tenant_id=args[3] if len(args) > 3 else "default",
             message=(
                 f"{detail}; retries exhausted after "
                 f"{retry_metadata.get('retries', 0)} attempts"
@@ -36,6 +50,8 @@ def mark_ingestion_failed(message_data: dict, retry_metadata: dict) -> None:
             updated_at=datetime.now(UTC),
         )
     )
+    if len(args) > 1:
+        _cleanup_upload(str(args[1]))
 
 
 @dramatiq.actor(
@@ -65,6 +81,7 @@ def ingest_document(
             job_id=job_id,
             state=JobState.RUNNING,
             document_id=document_id,
+            tenant_id=tenant_id,
             updated_at=datetime.now(UTC),
         )
     )
@@ -83,6 +100,7 @@ def ingest_document(
                 job_id=job_id,
                 state=JobState.RETRYING,
                 document_id=document_id,
+                tenant_id=tenant_id,
                 message=f"{type(exc).__name__}: {exc}",
                 updated_at=datetime.now(UTC),
             )
@@ -93,7 +111,9 @@ def ingest_document(
             job_id=job_id,
             state=JobState.SUCCEEDED,
             document_id=document_id,
+            tenant_id=tenant_id,
             result=result,
             updated_at=datetime.now(UTC),
         )
     )
+    _cleanup_upload(str(resolved_source))

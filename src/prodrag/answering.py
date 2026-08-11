@@ -123,12 +123,19 @@ class GroundedAnswerService:
             )
             remaining -= len(content)
 
-        raw_answer = self._chain.invoke(
-            {
-                "question": question,
-                "sources": json.dumps(source_payload, ensure_ascii=False),
-            }
-        ).strip()
+        invoke_payload = {
+            "question": question,
+            "sources": json.dumps(source_payload, ensure_ascii=False),
+        }
+        last_error: Exception | None = None
+        for _ in range(self.settings.model_retry_attempts):
+            try:
+                raw_answer = self._chain.invoke(invoke_payload).strip()
+                break
+            except Exception as exc:
+                last_error = exc
+        else:
+            raise RuntimeError("Answer generation failed after retries") from last_error
         if raw_answer == "NOT_FOUND" or not raw_answer:
             return QueryResponse(
                 request_id=request_id,

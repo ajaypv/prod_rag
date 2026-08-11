@@ -24,6 +24,12 @@ class InspectableQdrantIndex(QdrantIndex):
         return self.recording_store
 
 
+def test_blank_qdrant_path_selects_server_mode() -> None:
+    settings = Settings(_env_file=None, qdrant_path="", qdrant_hnsw_enabled=True)
+
+    assert settings.qdrant_path is None
+
+
 def test_qdrant_hybrid_search_explicitly_uses_rrf_fusion() -> None:
     store = RecordingStore()
     index = InspectableQdrantIndex(Settings(_env_file=None), store)
@@ -39,6 +45,9 @@ def test_qdrant_hybrid_search_explicitly_uses_rrf_fusion() -> None:
     assert results[0].hybrid_score == 0.75
     assert store.arguments["hybrid_fusion"].fusion == models.Fusion.RRF
     assert store.arguments["search_params"].exact is True
+    readiness = store.arguments["filter"].must[1]
+    assert isinstance(readiness, models.Filter)
+    assert readiness.should[0].key == "metadata.revision_ready"
 
 
 def test_qdrant_embedded_mode_omits_unsupported_search_params() -> None:
