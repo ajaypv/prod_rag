@@ -4,6 +4,12 @@ Lightweight production RAG for roughly 10–30 technical documents or FAQ files.
 contents are parsed locally and stored in a local Qdrant server. OCI Generative AI is used
 for safety triage, embedding, reranking, and grounded answer generation through LangChain.
 
+## Live learning application
+
+[Open the interactive RAG learning application](https://ajaypv.github.io/prod_rag/)
+
+[![Open Live Demo](https://img.shields.io/badge/Open-Live_Demo-222222?style=for-the-badge&logo=github)](https://ajaypv.github.io/prod_rag/)
+
 ## B2B SaaS support demo
 
 The repository includes nine fictional NimbusFlow support documents (eight Markdown and one HTML FAQ), labeled retrieval cases,
