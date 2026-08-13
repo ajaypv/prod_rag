@@ -1,0 +1,5 @@
+managePackageManagerVersions: false
+pmOnFail: ignore
+
+allowBuilds:
+  esbuild: true

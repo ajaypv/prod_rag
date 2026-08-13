@@ -1,6 +1,9 @@
 .env
 .pytest_cache/
 .pytest-tmp/
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
 .ruff_cache/
 .uv-cache/
 .venv/
