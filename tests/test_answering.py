@@ -190,3 +190,26 @@ def test_grounded_policy_answer_still_requires_human_review() -> None:
     assert response.requires_human_review is True
     assert response.routing_destination == RoutingDestination.CUSTOMER_SUPPORT
     assert response.escalation_reasons == [HumanReviewReason.POLICY_RULE]
+
+
+def test_prepared_evidence_matches_shared_context_budget() -> None:
+    settings = Settings(_env_file=None, context_char_budget=4_000)
+    service = GroundedAnswerService(
+        settings,
+        FakeListChatModel(responses=[]),
+        ScoreThresholdConfidenceGrader(settings),
+    )
+    candidates = [
+        RetrievedCandidate(
+            Document(page_content="a" * 3_000, metadata={"document_id": "first"}),
+            hybrid_score=0.9,
+        ),
+        RetrievedCandidate(
+            Document(page_content="b" * 3_000, metadata={"document_id": "second"}),
+            hybrid_score=0.8,
+        ),
+    ]
+
+    evidence = service.prepare_evidence(candidates)
+
+    assert [len(item.document.page_content) for item in evidence] == [3_000, 1_000]

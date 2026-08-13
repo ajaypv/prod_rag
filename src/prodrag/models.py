@@ -67,6 +67,8 @@ class Citation(BaseModel):
     section: str
     source_name: str
     relevance_score: float
+    document_checksum: str | None = None
+    chunk_id: str | None = None
 
 
 class QueryResponse(BaseModel):

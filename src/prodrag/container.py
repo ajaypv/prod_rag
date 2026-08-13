@@ -9,6 +9,7 @@ from prodrag.ingestion import IngestionService
 from prodrag.ingestion.chunking import SemanticChunkingStrategy
 from prodrag.ingestion.parsing import DoclingParser, MarkdownSectioner
 from prodrag.jobs import RedisJobStore
+from prodrag.quality import RAGQualityJudge
 from prodrag.querying import QueryService
 from prodrag.retrieval import RetrievalService
 from prodrag.retrieval.confidence import ScoreThresholdConfidenceGrader
@@ -87,6 +88,14 @@ def get_query_service() -> QueryService:
         get_retrieval_service(),
         get_answer_service(),
         get_triage_service(),
+    )
+
+
+@lru_cache(maxsize=1)
+def get_quality_judge() -> RAGQualityJudge:
+    """Create the release-gating judge used only by end-to-end evaluation."""
+    return RAGQualityJudge(
+        get_chat_model(), retry_attempts=get_settings().model_retry_attempts
     )
 
 

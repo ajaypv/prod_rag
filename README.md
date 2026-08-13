@@ -330,6 +330,40 @@ and routing accuracy. Those metrics return `null` when the dataset contains no c
 Evaluation output also includes `retrieval_p95_ms` and, in end-to-end mode,
 `end_to_end_p95_ms`.
 
+### Production-quality answer evaluation
+
+For answerable golden cases, add `expected_answer`. The end-to-end evaluator uses it to score
+four independent dimensions: answer correctness, completeness, faithfulness to the retrieved
+contexts, and whether cited contexts actually support the answer. These judge calls run only in
+offline evaluation; they do not add latency or cost to normal user queries.
+
+Document-level precision can hide poor passage selection when many chunks come from one PDF. Add
+`expected_context_phrases` containing distinctive facts that must appear in the returned parent
+contexts. The evaluator then reports passage-level `mean_context_precision` and
+`mean_context_recall` in addition to document metrics.
+
+```json
+{"question":"How long are events retained?","expected_answer":"Events are retained for 24 hours.","expected_document_ids":["streaming-api"],"expected_context_phrases":["retained for 24 hours"],"expected_answerable":true}
+```
+
+Run strict release gates after calibrating them on a development set and confirming them on a
+separate held-out set:
+
+```powershell
+uv run prodrag-eval .\eval\salesforce-streaming-api.jsonl `
+  --end-to-end `
+  --min-recall 0.95 `
+  --min-context-recall 0.95 `
+  --min-answer-correctness 0.90 `
+  --min-answer-completeness 0.85 `
+  --min-faithfulness 0.95 `
+  --min-citation-correctness 0.95 `
+  --min-abstention 0.90
+```
+
+These scores use an LLM judge and should be supplemented with human review of failures and a
+sample of passing cases. A citation marker alone is not treated as proof of factual support.
+
 ## Production checklist
 
 - Run Qdrant and Redis on persistent encrypted volumes with backups and resource limits.

@@ -35,6 +35,30 @@ class GroundedAnswerService:
         self.confidence_grader = confidence_grader
         self._chain = ANSWER_PROMPT | chat_model | StrOutputParser()
 
+    def prepare_evidence(
+        self, candidates: Sequence[RetrievedCandidate]
+    ) -> list[RetrievedCandidate]:
+        """Return the exact ranked/truncated contexts that fit in the answer prompt budget."""
+        evidence: list[RetrievedCandidate] = []
+        remaining = self.settings.context_char_budget
+        for candidate in candidates:
+            if remaining <= 0:
+                break
+            content = candidate.document.page_content[:remaining]
+            if not content:
+                continue
+            evidence.append(
+                RetrievedCandidate(
+                    document=candidate.document.model_copy(
+                        update={"page_content": content}
+                    ),
+                    hybrid_score=candidate.hybrid_score,
+                    rerank_score=candidate.rerank_score,
+                )
+            )
+            remaining -= len(content)
+        return evidence
+
     def answer(
         self,
         question: str,
@@ -92,16 +116,27 @@ class GroundedAnswerService:
                 escalation_reasons=[HumanReviewReason.LOW_CONFIDENCE],
             )
 
+        evidence = self.prepare_evidence(candidates)
+        if not evidence:
+            return QueryResponse(
+                request_id=request_id,
+                category=question_triage.category,
+                confidence=ConfidenceLevel.LOW,
+                requires_human_review=True,
+                routing_destination=RoutingDestination.CUSTOMER_SUPPORT,
+                answered=False,
+                answer=(
+                    "The indexed documentation does not contain usable textual evidence. "
+                    "Human review is required; route this ticket to customer support."
+                ),
+                escalation_reasons=[HumanReviewReason.INSUFFICIENT_CONTEXT],
+            )
+
         source_payload: list[dict[str, str]] = []
         citations: list[Citation] = []
-        remaining = self.settings.context_char_budget
-        for candidate in candidates:
-            if remaining <= 0:
-                break
+        for candidate in evidence:
             metadata = candidate.document.metadata
-            content = candidate.document.page_content[:remaining]
-            if not content:
-                continue
+            content = candidate.document.page_content
             source_id = f"S{len(source_payload) + 1}"
             source_payload.append(
                 {
@@ -119,9 +154,14 @@ class GroundedAnswerService:
                     section=str(metadata.get("section", "Document")),
                     source_name=str(metadata.get("source_name", "unknown")),
                     relevance_score=round(candidate.final_score, 6),
+                    document_checksum=(
+                        str(metadata["checksum"]) if metadata.get("checksum") else None
+                    ),
+                    chunk_id=(
+                        str(metadata["chunk_id"]) if metadata.get("chunk_id") else None
+                    ),
                 )
             )
-            remaining -= len(content)
 
         invoke_payload = {
             "question": question,

@@ -29,8 +29,10 @@ Status snapshot: 2026-08-11.
   call remains the main retrieval latency source.
 - A tenant- and revision-safe semantic response cache is not implemented. Its cache key and
   invalidation policy must include tenant, product, version, embedding model, and document revision.
-- Model token usage, per-query cost, automated faithfulness drift, and cost-spike alert rules are not
-  exported. The repository contains a planning estimate for 1,000 queries, not a billing meter.
+- Model token usage, per-query cost, online faithfulness drift, and cost-spike alert rules are not
+  exported. Offline golden evaluation now scores answer correctness, completeness, faithfulness,
+  and citation correctness, but the repository contains a planning estimate for 1,000 queries,
+  not a billing meter.
 - The deployment owner must provide persistent encrypted Qdrant and Redis volumes, backups, private
   networking, TLS, rate limits, production secrets, at least two API replicas, metrics scraping,
   alert routing, and ticket-system integration.
