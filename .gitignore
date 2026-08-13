@@ -3,6 +3,7 @@
 .pytest-tmp/
 frontend/node_modules/
 frontend/dist/
+frontend/.vite/
 frontend/*.tsbuildinfo
 .ruff_cache/
 .uv-cache/

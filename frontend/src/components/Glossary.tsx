@@ -15,6 +15,34 @@ import {
   type GlossaryEntry,
 } from "../glossaryData";
 
+const chapterVisuals: Record<GlossaryEntry["category"], { src: string; alt: string; caption: string }> = {
+  Foundations: {
+    src: `${import.meta.env.BASE_URL}media/glossary/foundations.gif`,
+    alt: "Animated diagram showing a question moving through sources before becoming a grounded answer.",
+    caption: "A RAG answer travels through evidence before it reaches the reader.",
+  },
+  "Ingestion & indexing": {
+    src: `${import.meta.env.BASE_URL}media/glossary/ingestion.gif`,
+    alt: "Animated diagram showing a source document becoming searchable chunks and an index.",
+    caption: "Documents are parsed, divided, and linked back to their source before search begins.",
+  },
+  Retrieval: {
+    src: `${import.meta.env.BASE_URL}media/glossary/retrieval.gif`,
+    alt: "Animated diagram showing semantic and keyword searches converging into one result list.",
+    caption: "Semantic meaning and exact words take separate routes into one shortlist.",
+  },
+  "Ranking & context": {
+    src: `${import.meta.env.BASE_URL}media/glossary/ranking.gif`,
+    alt: "Animated diagram showing retrieved passages being reordered by a reranking stage.",
+    caption: "Broad candidates are read again and reordered before the final context is assembled.",
+  },
+  "Evaluation & trust": {
+    src: `${import.meta.env.BASE_URL}media/glossary/evaluation.gif`,
+    alt: "Animated newspaper gauges filling for recall, precision, and faithfulness.",
+    caption: "Retrieval coverage, context quality, and answer grounding are measured separately.",
+  },
+};
+
 function initialEntryId() {
   const hash = window.location.hash.replace("#glossary-", "");
   return glossaryEntries.some((entry) => entry.id === hash) ? hash : null;
@@ -53,6 +81,7 @@ export function Glossary() {
 
   const selectedEntry = glossaryEntries.find((entry) => entry.id === selectedId);
   const selectedIndex = selectedEntry ? glossaryEntries.findIndex((entry) => entry.id === selectedEntry.id) : -1;
+  const chapterVisual = selectedEntry ? chapterVisuals[selectedEntry.category] : null;
 
   function selectEntry(id: string) {
     setSelectedId(id);
@@ -109,6 +138,16 @@ export function Glossary() {
             <span style={{ width: `${((selectedIndex + 1) / glossaryEntries.length) * 100}%` }} />
           </div>
 
+          <div className="chapter-newspaper-masthead" aria-label="The RAG Review">
+            <span>Groundwork field notes</span>
+            <strong>The RAG Review</strong>
+            <div>
+              <span>Practical retrieval engineering</span>
+              <span>Concept {String(selectedIndex + 1).padStart(2, "0")} of {glossaryEntries.length}</span>
+              <span>Reading edition</span>
+            </div>
+          </div>
+
           <header className="chapter-title-page">
             <div className="chapter-running-head">
               <span>{selectedEntry.category}</span>
@@ -130,6 +169,13 @@ export function Glossary() {
               {selectedEntry.overview.map((copy, index) => <CitedParagraph key={index} entry={selectedEntry} copy={copy} />)}
             </div>
           </section>
+
+          {chapterVisual && (
+            <figure className="chapter-newspaper-figure">
+              <img src={chapterVisual.src} alt={chapterVisual.alt} loading="lazy" />
+              <figcaption><span>Figure 01.</span> {chapterVisual.caption}</figcaption>
+            </figure>
+          )}
 
           <section className="chapter-section">
             <div className="chapter-section-label"><span>02</span><strong>How it works</strong></div>
@@ -155,15 +201,21 @@ export function Glossary() {
           {selectedEntry.comparison && (
             <section className="chapter-section chapter-comparison">
               <div className="chapter-section-label"><span>03</span><strong>{selectedEntry.comparison.title}</strong></div>
-              <div className="chapter-table-scroll">
-                <table>
-                  <thead><tr>{selectedEntry.comparison.columns.map((column) => <th key={column}>{column}</th>)}</tr></thead>
-                  <tbody>
-                    {selectedEntry.comparison.rows.map((row) => (
-                      <tr key={row[0]}>{row.map((cell, index) => <td key={`${row[0]}-${index}`}>{cell}</td>)}</tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="chapter-comparison-columns">
+                {selectedEntry.comparison.rows.map((row, index) => (
+                  <article key={row[0]}>
+                    <span>{String(index + 1).padStart(2, "0")}</span>
+                    <h3>{row[0]}</h3>
+                    <div>
+                      <small>{selectedEntry.comparison?.columns[1]}</small>
+                      <p>{row[1]}</p>
+                    </div>
+                    <div>
+                      <small>{selectedEntry.comparison?.columns[2]}</small>
+                      <p>{row[2]}</p>
+                    </div>
+                  </article>
+                ))}
               </div>
             </section>
           )}

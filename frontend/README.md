@@ -19,7 +19,7 @@ vector-database stacks.
 - Optional technical detail sections so the first view stays approachable
 - Scroll-triggered interviewer/candidate conversations with live question progress
 - Watch mode, answer-first practice mode, deep-dive follow-ups, and copy controls
-- Simple glossary cards that open source-backed, book-style concept chapters on demand
+- Simple glossary cards that open source-backed newspaper chapters with local educational GIFs
 - Numbered links to primary research and official technical documentation
 - Progress saved locally in the browser
 - Responsive sidebar on desktop and a curriculum drawer on mobile
