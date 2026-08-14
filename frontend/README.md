@@ -1,45 +1,38 @@
-# Groundwork frontend
+# RAG Textbook frontend
 
-Groundwork is a beginner-first RAG learning guide and interview-preparation experience. It uses a
-structured curriculum, plain-language explanations, focused animated diagrams, technical details,
-and short interview answers to teach the complete retrieval-augmented generation flow without
-assuming prior knowledge.
+The public frontend is a Hugo-generated learning book with two focused sections:
 
-The frontend is a standalone React application. It does not require the Python CLI, a model
-provider, or Qdrant because the lessons are explanatory rather than connected to live production
-data. Examples are provider-neutral so learners can apply the concepts to different model and
-vector-database stacks.
+- A 129-concept RAG glossary arranged from foundations through production operations
+- Interview Practice with nine interviewer/candidate conversations and a reveal-first practice mode
 
-## Learning experience
+The site does not require the Python CLI, a model provider, Qdrant, Node.js, React, or React Flow.
+Hugo renders the glossary and interview content as static HTML. A small vanilla JavaScript file
+provides search, chapter page turning, reading progress, and interview answer reveals.
 
-- Start Here page that explains RAG as **find, select, answer**
-- React Flow hero playground with functional retrieval controls and a live high-DPI evidence canvas
-- Nine lessons ordered from fundamentals through production readiness
-- Interactive React Flow diagrams with an automatically guided stage explanation
-- Optional technical detail sections so the first view stays approachable
-- Scroll-triggered interviewer/candidate conversations with live question progress
-- Watch mode, answer-first practice mode, deep-dive follow-ups, and copy controls
-- Simple glossary cards that open source-backed newspaper chapters with local educational GIFs
-- Numbered links to primary research and official technical documentation
-- Progress saved locally in the browser
-- Responsive sidebar on desktop and a curriculum drawer on mobile
+## Content structure
+
+- `data/glossary.json` — chapter content, citations, learning order, and related concepts
+- `data/interviews.json` — interview questions, answers, follow-ups, trade-offs, and sources
+- `layouts/` — Hugo templates for the textbook and interview pages
+- `assets/css/main.css` — responsive textbook visual system
+- `assets/js/book.js` — lightweight client-side chapter and practice interactions
+- `static/media/glossary/` — local educational GIFs
 
 ## Run locally
 
 ```powershell
 Set-Location C:\Users\AJay\Documents\ogent\refernce\ocigeniworkshop\prodrag\frontend
-pnpm install
-pnpm dev
+$cachePath = Join-Path (Resolve-Path -LiteralPath .).Path ".hugo_cache"
+hugo server --cacheDir $cachePath --baseURL http://127.0.0.1:4173/prod_rag/ --appendPort=false
 ```
 
-Open `http://127.0.0.1:4173`.
+Open `http://127.0.0.1:4173/prod_rag/`.
 
 ## Production build
 
 ```powershell
-pnpm build
-pnpm preview
+$cachePath = Join-Path (Resolve-Path -LiteralPath .).Path ".hugo_cache"
+hugo --minify --cacheDir $cachePath
 ```
 
-The optimized static site is written to `dist/`. The project-local `.npmrc` intentionally points
-pnpm at the official npm registry, overriding any inherited corporate registry configuration.
+The static site is written to `dist/` and deployed to GitHub Pages by `.github/workflows/pages.yml`.

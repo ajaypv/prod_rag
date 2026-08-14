@@ -1,0 +1,180 @@
+{{ define "main" }}
+{{ $book := site.Data.glossary }}
+{{ $entries := $book.entries }}
+{{ $categoryNotes := dict
+  "Foundations" "Begin with the words and actors used throughout a RAG system."
+  "Ingestion & indexing" "Follow a source document as it becomes clean, traceable, searchable knowledge."
+  "Retrieval" "Learn how a question finds broad evidence using lexical, semantic, and hybrid search."
+  "Ranking & context" "See how candidates become a small, high-quality evidence set."
+  "Generation & prompting" "Understand how the model writes from evidence and cites what it used."
+  "Evaluation & trust" "Measure retrieval, answers, citations, refusals, and regressions separately."
+  "Operations & security" "Run the complete pipeline safely, reliably, and at a controlled cost."
+}}
+{{ $categoryImages := dict
+  "Foundations" "foundations.gif"
+  "Ingestion & indexing" "ingestion.gif"
+  "Retrieval" "retrieval.gif"
+  "Ranking & context" "ranking.gif"
+  "Generation & prompting" "ranking.gif"
+  "Evaluation & trust" "evaluation.gif"
+  "Operations & security" "evaluation.gif"
+}}
+
+<section class="book-contents" data-book-contents>
+  <header class="textbook-cover">
+    <div class="cover-board-mark">Learning edition · Computer science</div>
+    <div class="cover-title">
+      <span>From first idea to production</span>
+      <h1>Retrieval-Augmented<br>Generation</h1>
+      <p>A visual glossary and interview companion</p>
+    </div>
+    <div class="cover-route" aria-label="RAG flow">
+      <span>Ask</span><i>1</i><span>Find</span><i>2</i><span>Read</span><i>3</i><span>Answer</span>
+    </div>
+    <div class="cover-footer"><span>129 concepts</span><span>Beginner to production</span><span>Source-backed</span></div>
+  </header>
+
+  <section class="how-to-read" aria-labelledby="how-to-read-title">
+    <div><span>How to use this book</span><h2 id="how-to-read-title">Read in order, or look up one idea.</h2></div>
+    <ol>
+      <li><b>1</b><span><strong>Start with Foundations</strong> if RAG is new to you.</span></li>
+      <li><b>2</b><span><strong>Select any word</strong> to open its complete chapter.</span></li>
+      <li><b>3</b><span><strong>Use Interview Practice</strong> after you can explain the idea yourself.</span></li>
+    </ol>
+  </section>
+
+  <section class="contents-directory" aria-labelledby="contents-title">
+    <header class="directory-heading">
+      <div><span>Contents</span><h2 id="contents-title">RAG glossary</h2></div>
+      <p>Short definitions first. Full explanation, example, production notes, interview wording, and references after you open a chapter.</p>
+    </header>
+
+    <div class="directory-tools">
+      <label class="book-search">
+        <span>Find a concept</span>
+        <input type="search" placeholder="Try BM25, chunking, recall…" autocomplete="off" data-glossary-search>
+      </label>
+      <div class="chapter-filters" aria-label="Filter glossary chapters">
+        <button class="active" type="button" data-category-filter="All topics">All topics</button>
+        {{ range $book.categoryOrder }}<button type="button" data-category-filter="{{ . }}">{{ . }}</button>{{ end }}
+      </div>
+      <p class="directory-result" aria-live="polite"><strong data-result-count>{{ len $entries }}</strong> concepts in reading order</p>
+    </div>
+
+    <div class="chapter-groups">
+      {{ range $categoryIndex, $category := $book.categoryOrder }}
+        {{ $categoryEntries := where $entries "category" $category }}
+        <section class="chapter-group" data-category-group="{{ $category }}">
+          <header>
+            <span>Unit {{ printf "%02d" (add $categoryIndex 1) }}</span>
+            <div><h3>{{ $category }}</h3><p>{{ index $categoryNotes $category }}</p></div>
+            <b>{{ len $categoryEntries }} concepts</b>
+          </header>
+          <div class="chapter-cards">
+            {{ range $entry := $categoryEntries }}
+              {{ $number := 0 }}
+              {{ range $index, $candidate := $entries }}{{ if eq $candidate.id $entry.id }}{{ $number = add $index 1 }}{{ end }}{{ end }}
+              <a href="#concept-{{ $entry.id }}" data-chapter-link="{{ $entry.id }}" data-category="{{ $entry.category }}" data-search-copy="{{ lower (printf "%s %s %s" $entry.term $entry.definition $entry.category) }}">
+                <span>{{ printf "%03d" $number }}</span>
+                <div><strong>{{ $entry.term }}</strong><p>{{ $entry.definition }}</p><small>{{ $entry.level }} · {{ $entry.readTime }}</small></div>
+                <i aria-hidden="true">→</i>
+              </a>
+            {{ end }}
+          </div>
+        </section>
+      {{ end }}
+    </div>
+
+    <p class="no-results" hidden data-no-results>No matching concept was found. Try a shorter word or select “All topics”.</p>
+  </section>
+</section>
+
+<section class="chapter-reader" hidden data-chapter-reader>
+  {{ range $index, $entry := $entries }}
+    <article class="textbook-chapter" id="concept-{{ $entry.id }}" hidden data-chapter="{{ $entry.id }}">
+      <div class="chapter-ribbon">
+        <button type="button" data-back-to-contents>← Contents</button>
+        <span>Concept {{ printf "%03d" (add $index 1) }} of {{ len $entries }}</span>
+      </div>
+
+      <header class="textbook-chapter-title">
+        <span>{{ $entry.category }} · {{ $entry.level }}</span>
+        <div class="chapter-number">{{ printf "%02d" (add $index 1) }}</div>
+        <h1>{{ $entry.term }}</h1>
+        <p>{{ $entry.definition }}</p>
+        <dl><div><dt>Level</dt><dd>{{ $entry.level }}</dd></div><div><dt>Reading time</dt><dd>{{ $entry.readTime }}</dd></div><div><dt>References</dt><dd>{{ len $entry.sourceIds }}</dd></div></dl>
+      </header>
+
+      <aside class="learning-objectives">
+        <span>After reading this concept, you should be able to</span>
+        <ul>{{ range $entry.mechanics }}<li>{{ .title }}</li>{{ end }}</ul>
+      </aside>
+
+      <section class="lesson-section concept-explanation">
+        <div class="lesson-section-heading"><span>1</span><h2>Understanding the idea</h2></div>
+        <div class="reading-copy">
+          {{ range $paragraph := $entry.overview }}
+            <p>{{ $paragraph.text }}
+              {{ if $paragraph.citations }}<sup class="source-marks">{{ range $citation := $paragraph.citations }}{{ range $sourceIndex, $sourceId := $entry.sourceIds }}{{ if eq $citation $sourceId }}<a href="#source-{{ $entry.id }}-{{ $sourceId }}">{{ add $sourceIndex 1 }}</a>{{ end }}{{ end }}{{ end }}</sup>{{ end }}
+            </p>
+          {{ end }}
+        </div>
+      </section>
+
+      <figure class="lesson-figure">
+        <img src="{{ printf "media/glossary/%s" (index $categoryImages $entry.category) | relURL }}" alt="Animated visual for {{ $entry.category }}" loading="lazy">
+        <figcaption><b>Figure {{ printf "%02d" (add $index 1) }}.</b> Follow the highlighted information as it moves through this part of the RAG system.</figcaption>
+      </figure>
+
+      <section class="lesson-section">
+        <div class="lesson-section-heading"><span>2</span><h2>How it works</h2></div>
+        <ol class="learning-steps">
+          {{ range $stepIndex, $step := $entry.mechanics }}
+            <li><b>{{ add $stepIndex 1 }}</b><div><h3>{{ $step.title }}</h3><p>{{ $step.copy.text }}</p></div></li>
+          {{ end }}
+        </ol>
+      </section>
+
+      <aside class="worked-example">
+        <span>Example</span><h2>{{ $entry.example.title }}</h2><p>{{ $entry.example.text }}</p>
+      </aside>
+
+      {{ with $entry.comparison }}
+        <section class="lesson-section">
+          <div class="lesson-section-heading"><span>3</span><h2>{{ .title }}</h2></div>
+          <div class="comparison-cards">
+            {{ $comparison := . }}
+            {{ range .rows }}<article><h3>{{ index . 0 }}</h3><div><small>{{ index $comparison.columns 1 }}</small><p>{{ index . 1 }}</p></div><div><small>{{ index $comparison.columns 2 }}</small><p>{{ index . 2 }}</p></div></article>{{ end }}
+          </div>
+        </section>
+      {{ end }}
+
+      <section class="remember-box">
+        <span>Remember</span>
+        <ul>{{ range $entry.productionNotes }}<li>{{ . }}</li>{{ end }}</ul>
+      </section>
+
+      <section class="interview-box">
+        <span>Say this in an interview</span>
+        <blockquote>{{ $entry.interviewAnswer }}</blockquote>
+        <a href="{{ "interview/" | relURL }}">Continue to Interview Practice →</a>
+      </section>
+
+      <section class="related-concepts">
+        <div><span>Revise next</span><h2>Related concepts</h2></div>
+        <div>{{ range $relatedId := $entry.related }}{{ range first 1 (where $entries "id" $relatedId) }}<a href="#concept-{{ .id }}" data-chapter-link="{{ .id }}"><small>{{ .category }}</small><strong>{{ .term }}</strong></a>{{ end }}{{ end }}</div>
+      </section>
+
+      <section class="chapter-references">
+        <div><span>References</span><h2>Read the original sources</h2><p>These sources support the explanation and provide deeper technical detail.</p></div>
+        <ol>{{ range $sourceId := $entry.sourceIds }}{{ $source := index $book.sources $sourceId }}<li id="source-{{ $entry.id }}-{{ $sourceId }}"><a href="{{ $source.url }}" target="_blank" rel="noreferrer"><strong>{{ $source.title }}</strong><small>{{ $source.publisher }}</small></a></li>{{ end }}</ol>
+      </section>
+
+      <nav class="chapter-turner" aria-label="Chapter navigation">
+        {{ if gt $index 0 }}{{ $previous := index $entries (sub $index 1) }}<a href="#concept-{{ $previous.id }}" data-chapter-link="{{ $previous.id }}"><span>← Previous</span><strong>{{ $previous.term }}</strong></a>{{ else }}<button type="button" data-back-to-contents><span>← Previous</span><strong>Book contents</strong></button>{{ end }}
+        {{ if lt (add $index 1) (len $entries) }}{{ $next := index $entries (add $index 1) }}<a href="#concept-{{ $next.id }}" data-chapter-link="{{ $next.id }}"><span>Next →</span><strong>{{ $next.term }}</strong></a>{{ else }}<a href="{{ "interview/" | relURL }}"><span>Next →</span><strong>Interview practice</strong></a>{{ end }}
+      </nav>
+    </article>
+  {{ end }}
+</section>
+{{ end }}
