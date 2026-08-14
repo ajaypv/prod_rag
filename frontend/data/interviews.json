@@ -1,0 +1,144 @@
+[
+  {
+    "category": "Getting started",
+    "question": "What is RAG, and how does it work?",
+    "quick": "RAG is an architecture that retrieves relevant external knowledge and supplies it to a language model as context before generation. It improves grounding and allows knowledge to be updated without retraining the model.",
+    "detailed": "RAG separates knowledge retrieval from language generation. The retrieval layer selects evidence at query time, while the generation model turns that evidence into a natural-language response.",
+    "followUp": "How is RAG different from fine-tuning?",
+    "tradeoff": "RAG keeps knowledge current, but its answer quality depends heavily on retrieval quality.",
+    "sources": [
+      {
+        "label": "Lewis et al., Retrieval-Augmented Generation (2020)",
+        "url": "https://arxiv.org/abs/2005.11401"
+      }
+    ]
+  },
+  {
+    "category": "Getting started",
+    "question": "Why would you use RAG instead of relying on the model alone?",
+    "quick": "I use RAG when a model needs current, private, or domain-specific facts. It is easier to update and audit than embedding all changing knowledge through fine-tuning.",
+    "detailed": "RAG is appropriate when answers depend on a changing or access-controlled corpus. It is not a guarantee against hallucination; grounding prompts, citations, evaluation, and abstention remain necessary.",
+    "followUp": "When would you choose fine-tuning instead?",
+    "tradeoff": "RAG improves factual access but adds retrieval latency and operational complexity.",
+    "sources": [
+      {
+        "label": "Lewis et al., Retrieval-Augmented Generation (2020)",
+        "url": "https://arxiv.org/abs/2005.11401"
+      }
+    ]
+  },
+  {
+    "category": "How it works",
+    "question": "How do you prepare documents for retrieval?",
+    "quick": "I chunk documents along structural and semantic boundaries. I retrieve small child chunks for precision and expand winning children to parent sections so the model gets complete context.",
+    "detailed": "Parent-child retrieval searches small semantic children for precision, then restores the larger parent section for generation. Stable identifiers and checksums make re-ingestion safe and repeatable.",
+    "followUp": "How would you choose chunk size and overlap?",
+    "tradeoff": "Small chunks improve matching but can lose context; large chunks preserve context but can reduce precision.",
+    "sources": [
+      {
+        "label": "Docling documentation — concepts",
+        "url": "https://docling-project.github.io/docling/concepts/"
+      }
+    ]
+  },
+  {
+    "category": "How it works",
+    "question": "What is hybrid retrieval, and why combine dense search with BM25?",
+    "quick": "Dense retrieval handles semantic similarity and paraphrases, while BM25 handles exact identifiers and rare terms. A production system often combines both as hybrid retrieval.",
+    "detailed": "The same embedding model and version must represent both indexed documents and queries. BM25 remains a lexical, local calculation and complements dense vector similarity.",
+    "followUp": "Why can dense retrieval miss an exact error code?",
+    "tradeoff": "Dense search understands intent but can miss exact tokens; BM25 finds tokens but may miss paraphrases.",
+    "sources": [
+      {
+        "label": "Elastic documentation — hybrid search",
+        "url": "https://www.elastic.co/docs/solutions/search/hybrid-search"
+      },
+      {
+        "label": "Qdrant documentation — hybrid and multi-stage queries",
+        "url": "https://qdrant.tech/documentation/search/hybrid-queries/"
+      }
+    ]
+  },
+  {
+    "category": "How it works",
+    "question": "How do RRF and reranking improve retrieval results?",
+    "quick": "I retrieve broadly for recall, fuse dense and BM25 ranks with RRF, then rerank a bounded candidate set for precision before assembling final context.",
+    "detailed": "RRF uses reciprocal rank contributions rather than raw dense and sparse scores. Reranking is a separate model operation from query embedding and answer generation.",
+    "followUp": "Why not rerank every document?",
+    "tradeoff": "More candidates can improve recall, but reranking too many increases latency and cost.",
+    "sources": [
+      {
+        "label": "Qdrant documentation — hybrid and multi-stage queries",
+        "url": "https://qdrant.tech/documentation/search/hybrid-queries/"
+      },
+      {
+        "label": "Elastic documentation — hybrid search",
+        "url": "https://www.elastic.co/docs/solutions/search/hybrid-search"
+      }
+    ]
+  },
+  {
+    "category": "How it works",
+    "question": "How do you generate an answer that stays grounded in its sources?",
+    "quick": "The generator receives only selected source blocks with IDs. The prompt requires evidence-only answering and citations, and the application validates those citations before returning the response.",
+    "detailed": "Context is truncated deterministically to a configured character or token budget. Missing citations, NOT_FOUND, or unusable evidence produce an abstention rather than a normal answer.",
+    "followUp": "Does a citation prove the answer is faithful?",
+    "tradeoff": "Citation presence is necessary but not sufficient; the cited source must actually support the claim.",
+    "sources": [
+      {
+        "label": "Lewis et al., Retrieval-Augmented Generation (2020)",
+        "url": "https://arxiv.org/abs/2005.11401"
+      }
+    ]
+  },
+  {
+    "category": "Quality and production",
+    "question": "How do you reduce hallucinations in a RAG system?",
+    "quick": "I prevent hallucinations with layered controls: safe input routing, strong retrieval, confidence gates, evidence-only generation, citation validation, and an explicit abstention path.",
+    "detailed": "Safety triage, deterministic confidence thresholds, evidence-only prompts, citation validation, and human-review routing form independent safeguards.",
+    "followUp": "How would you tune an abstention threshold?",
+    "tradeoff": "A strict threshold reduces unsupported answers but increases the number of questions sent for human review.",
+    "sources": [
+      {
+        "label": "NIST AI 600-1 — Generative AI risk profile",
+        "url": "https://www.nist.gov/publications/artificial-intelligence-risk-management-framework-generative-artificial-intelligence"
+      }
+    ]
+  },
+  {
+    "category": "Quality and production",
+    "question": "How do you evaluate RAG quality?",
+    "quick": "I evaluate retrieval with recall, precision, hit rate, and MRR; generation with correctness, completeness, faithfulness, and citation correctness; and safety with abstention accuracy.",
+    "detailed": "Golden evaluations should contain questions, expected document IDs, reference answers, and unanswerable cases. CI thresholds should gate releases rather than merely produce a report.",
+    "followUp": "Can retrieval have perfect recall and still be poor?",
+    "tradeoff": "Returning everything can maximize recall while damaging precision, latency, and answer quality.",
+    "sources": [
+      {
+        "label": "Ragas documentation — RAG evaluation metrics",
+        "url": "https://docs.ragas.io/en/stable/concepts/metrics/available_metrics/"
+      }
+    ]
+  },
+  {
+    "category": "Quality and production",
+    "question": "What makes a RAG system production-ready?",
+    "quick": "I treat retrieval quality as an operational signal. Every query is traced end to end, every release runs a golden evaluation, and changes to models, prompts, or indexes are versioned and reversible.",
+    "detailed": "Production systems need idempotent ingestion, revision replacement, timeouts, bounded retries, structured traces, quality regression gates, and documented recovery paths.",
+    "followUp": "Which production metrics would you alert on first?",
+    "tradeoff": "More safeguards and observability increase operational cost, but make quality failures diagnosable.",
+    "sources": [
+      {
+        "label": "OpenTelemetry — GenAI semantic conventions",
+        "url": "https://opentelemetry.io/docs/specs/semconv/gen-ai/"
+      },
+      {
+        "label": "NIST AI 600-1 — Generative AI risk profile",
+        "url": "https://www.nist.gov/publications/artificial-intelligence-risk-management-framework-generative-artificial-intelligence"
+      },
+      {
+        "label": "Ragas documentation — RAG evaluation metrics",
+        "url": "https://docs.ragas.io/en/stable/concepts/metrics/available_metrics/"
+      }
+    ]
+  }
+]

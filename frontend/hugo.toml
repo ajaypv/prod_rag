@@ -1,0 +1,14 @@
+baseURL = "https://ajaypv.github.io/prod_rag/"
+languageCode = "en-us"
+title = "RAG Textbook"
+publishDir = "dist"
+cleanDestinationDir = true
+disableKinds = ["taxonomy", "term", "RSS", "sitemap"]
+
+[params]
+  description = "A beginner-first RAG glossary and interview practice book."
+
+[markup]
+  [markup.goldmark]
+    [markup.goldmark.renderer]
+      unsafe = false

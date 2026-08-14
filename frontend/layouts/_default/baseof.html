@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="{{ site.Language.LanguageCode }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="{{ site.Params.description }}">
+  <meta name="theme-color" content="#f3efe3">
+  <title>{{ if .IsHome }}{{ site.Title }}{{ else }}{{ .Title }} · {{ site.Title }}{{ end }}</title>
+  {{ $styles := resources.Get "css/main.css" | minify | fingerprint }}
+  <link rel="stylesheet" href="{{ $styles.RelPermalink }}" integrity="{{ $styles.Data.Integrity }}">
+</head>
+<body data-page="{{ if .IsHome }}glossary{{ else }}{{ .Section }}{{ end }}">
+  <div class="reading-progress" aria-hidden="true"><span></span></div>
+  <header class="book-topbar">
+    <a class="book-brand" href="{{ site.Home.RelPermalink }}" aria-label="RAG Textbook home">
+      <span>R</span>
+      <strong>RAG Textbook</strong>
+    </a>
+    <nav aria-label="Main navigation">
+      <a class="{{ if .IsHome }}active{{ end }}" href="{{ site.Home.RelPermalink }}">Glossary</a>
+      <a class="{{ if eq .Section "interview" }}active{{ end }}" href="{{ "interview/" | relURL }}">Interview practice</a>
+    </nav>
+  </header>
+
+  <main class="book-shell">
+    {{ block "main" . }}{{ end }}
+  </main>
+
+  <footer class="book-footer">
+    <span>RAG Textbook</span>
+    <p>Concepts are linked to original research and official technical documentation.</p>
+  </footer>
+
+  {{ $script := resources.Get "js/book.js" | js.Build (dict "minify" hugo.IsProduction) | fingerprint }}
+  <script src="{{ $script.RelPermalink }}" integrity="{{ $script.Data.Integrity }}" defer></script>
+</body>
+</html>

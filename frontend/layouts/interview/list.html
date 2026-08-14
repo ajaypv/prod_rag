@@ -1,0 +1,63 @@
+{{ define "main" }}
+{{ $questions := site.Data.interviews }}
+<article class="interview-book">
+  <header class="interview-cover">
+    <span>Oral examination · RAG systems</span>
+    <h1>Interview Practice</h1>
+    <p>Read the interviewer’s question, pause and answer aloud, then compare your response with the candidate’s concise and detailed versions.</p>
+    <div><b>{{ len $questions }} questions</b><b>Beginner to production</b><b>Source-backed answers</b></div>
+  </header>
+
+  <section class="practice-instructions">
+    <div><span>Speaking pattern</span><h2>Define → explain → implement → trade off</h2></div>
+    <p>Start with one clear sentence. Explain the flow in plain words, add one production detail, then finish with the trade-off an experienced engineer would watch.</p>
+  </section>
+
+  <div class="interview-controls">
+    <p><strong data-interview-progress>Question 1 of {{ len $questions }}</strong><span>Answers appear as you move through the conversation.</span></p>
+    <button type="button" data-practice-toggle aria-pressed="false">Practice before revealing</button>
+  </div>
+
+  <section class="interview-conversation" aria-label="RAG mock interview">
+    {{ range $index, $question := $questions }}
+      <article class="interview-exchange" data-interview-exchange="{{ add $index 1 }}">
+        <div class="question-number"><span>Question</span><b>{{ printf "%02d" (add $index 1) }}</b></div>
+        <section class="dialogue-turn interviewer-turn">
+          <div class="speaker-mark">I</div>
+          <div><span>Interviewer</span><blockquote>{{ $question.question }}</blockquote></div>
+        </section>
+
+        <button class="reveal-answer" type="button" data-reveal-answer>Show candidate answer</button>
+
+        <section class="dialogue-turn candidate-turn" data-candidate-answer>
+          <div class="speaker-mark">C</div>
+          <div>
+            <span>Candidate · concise answer</span>
+            <p class="candidate-quick">{{ $question.quick }}</p>
+            <details>
+              <summary>Read the deeper explanation</summary>
+              <p>{{ $question.detailed }}</p>
+            </details>
+            <aside><b>Trade-off to mention</b><p>{{ $question.tradeoff }}</p></aside>
+          </div>
+        </section>
+
+        <section class="dialogue-turn follow-up-turn">
+          <div class="speaker-mark">I</div>
+          <div><span>Likely follow-up</span><blockquote>{{ $question.followUp }}</blockquote></div>
+        </section>
+
+        <footer class="interview-sources">
+          <span>Sources</span>
+          {{ range $question.sources }}<a href="{{ .url }}" target="_blank" rel="noreferrer">{{ .label }}</a>{{ end }}
+        </footer>
+      </article>
+    {{ end }}
+  </section>
+
+  <footer class="interview-finish">
+    <span>Continue learning</span><h2>Return to the textbook and strengthen any answer that felt uncertain.</h2>
+    <a href="{{ site.Home.RelPermalink }}">Open the RAG glossary</a>
+  </footer>
+</article>
+{{ end }}
