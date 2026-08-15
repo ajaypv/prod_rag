@@ -26,6 +26,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "deepeval>=4.1.8,<5",
     "httpx>=0.28.0,<1",
     "pytest>=8.4.0,<10",
     "pytest-cov>=6.2.0,<8",

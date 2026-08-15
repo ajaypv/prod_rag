@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import subprocess
 import uuid
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, status
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import PlainTextResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse, StreamingResponse
 
 from prodrag.config import SUPPORTED_EXTENSIONS, get_settings
 from prodrag.container import (
@@ -20,6 +23,11 @@ from prodrag.container import (
     get_query_service,
 )
 from prodrag.models import (
+    EvaluationAccepted,
+    EvaluationJobStatus,
+    EvaluationStage,
+    FlowEvent,
+    FlowStatus,
     HealthResponse,
     IngestionAccepted,
     JobState,
@@ -38,7 +46,7 @@ from prodrag.security import (
     require_admin_key,
     require_query_key,
 )
-from prodrag.worker import ingest_document
+from prodrag.worker import evaluate_dataset, ingest_document
 
 _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 _SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9_.-]+")
@@ -75,6 +83,13 @@ app = FastAPI(
     version="0.1.0",
     description="OCI GenAI RAG with local Qdrant hybrid retrieval",
     lifespan=lifespan,
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=get_settings().cors_origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Content-Type", "X-Admin-Key", "X-API-Key"],
 )
 app.middleware("http")(request_observability_middleware)
 
@@ -173,6 +188,23 @@ async def upload_document(
         state=JobState.QUEUED,
         document_id=document_id,
         tenant_id=tenant_id,
+        stage="queued",
+        message="Upload accepted and queued for ingestion",
+        events=[
+            FlowEvent(
+                operation_id=job_id,
+                stage="upload",
+                status=FlowStatus.COMPLETED,
+                message="Document upload and security checks completed",
+                data={"filename": original_name, "bytes": size},
+            ),
+            FlowEvent(
+                operation_id=job_id,
+                stage="queued",
+                status=FlowStatus.COMPLETED,
+                message="Ingestion job added to the worker queue",
+            ),
+        ],
         updated_at=datetime.now(UTC),
     )
     job_store = get_job_store()
@@ -246,3 +278,183 @@ async def query(
             return await run_in_threadpool(get_query_service().query, request)
     except TimeoutError as exc:
         raise HTTPException(status_code=504, detail="Query processing timed out") from exc
+
+
+@app.post("/v1/query/stream")
+async def query_stream(
+    request: QueryRequest,
+    auth: Annotated[AuthContext, Depends(require_query_key)],
+) -> StreamingResponse:
+    """Stream genuine query-stage events followed by the normal response and evidence."""
+    authorize_tenant(auth, request.tenant_id)
+    request_id = str(uuid.uuid4())
+    queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+
+    def record(event: FlowEvent) -> None:
+        loop.call_soon_threadsafe(
+            queue.put_nowait,
+            {"type": "stage", "event": event.model_dump(mode="json")},
+        )
+
+    async def execute() -> None:
+        try:
+            async with asyncio.timeout(get_settings().query_timeout_seconds):
+                execution = await run_in_threadpool(
+                    partial(
+                        get_query_service().query_with_evidence,
+                        request,
+                        request_id=request_id,
+                        on_stage=record,
+                    )
+                )
+            evidence = []
+            for item in execution.contexts:
+                metadata = item.document.metadata
+                evidence.append(
+                    {
+                        "document_id": str(metadata.get("document_id", "")),
+                        "title": str(metadata.get("title", "Untitled")),
+                        "section": str(metadata.get("section", "Document")),
+                        "source_name": str(metadata.get("source_name", "unknown")),
+                        "score": round(item.final_score, 6),
+                        "excerpt": item.document.page_content[:600],
+                    }
+                )
+            await queue.put(
+                {
+                    "type": "result",
+                    "response": execution.response.model_dump(mode="json"),
+                    "evidence": evidence,
+                }
+            )
+        except TimeoutError:
+            await queue.put(
+                {
+                    "type": "error",
+                    "status": 504,
+                    "detail": "Query processing timed out",
+                }
+            )
+        except Exception as exc:
+            await queue.put(
+                {
+                    "type": "error",
+                    "status": 500,
+                    "detail": f"Query flow failed: {type(exc).__name__}",
+                }
+            )
+
+    task = asyncio.create_task(execute())
+
+    async def stream():
+        try:
+            while True:
+                payload = await queue.get()
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                if payload["type"] in {"result", "error"}:
+                    break
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post(
+    "/v1/evaluations",
+    response_model=EvaluationAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def start_evaluation(
+    auth: Annotated[AuthContext, Depends(require_admin_key)],
+    file: Annotated[UploadFile, File()],
+    tenant_id: Annotated[str, Form(min_length=1, max_length=100)] = "default",
+    end_to_end: Annotated[bool, Form()] = True,
+    deep_eval: Annotated[bool, Form()] = False,
+) -> EvaluationAccepted:
+    if Path(file.filename or "").suffix.lower() != ".jsonl":
+        raise HTTPException(status_code=415, detail="Evaluation datasets must be JSONL files")
+    if deep_eval and not end_to_end:
+        raise HTTPException(status_code=422, detail="DeepEval requires end-to-end evaluation")
+    if not _SAFE_ID_RE.fullmatch(tenant_id):
+        raise HTTPException(status_code=422, detail="tenant_id contains unsupported characters")
+    authorize_tenant(auth, tenant_id)
+
+    settings = get_settings()
+    job_id = str(uuid.uuid4())
+    evaluation_dir = settings.data_dir / "evaluations"
+    evaluation_dir.mkdir(parents=True, exist_ok=True)
+    target = evaluation_dir / f"{job_id}-dataset.jsonl"
+    size = 0
+    try:
+        with target.open("xb") as output:
+            while block := await file.read(1024 * 1024):
+                size += len(block)
+                if size > settings.max_file_bytes:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail=f"File exceeds the {settings.max_file_mb} MB limit",
+                    )
+                output.write(block)
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
+    finally:
+        await file.close()
+    if size == 0:
+        target.unlink(missing_ok=True)
+        raise HTTPException(status_code=422, detail="Evaluation dataset is empty")
+    try:
+        await run_in_threadpool(_scan_upload, target)
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
+
+    queued = EvaluationJobStatus(
+        job_id=job_id,
+        state=JobState.QUEUED,
+        tenant_id=tenant_id,
+        stage=EvaluationStage.QUEUED,
+        deep_eval=deep_eval,
+        message="Evaluation queued",
+        events=[
+            FlowEvent(
+                operation_id=job_id,
+                stage=EvaluationStage.QUEUED.value,
+                status=FlowStatus.COMPLETED,
+                message="Golden dataset uploaded and queued",
+                data={"bytes": size},
+            )
+        ],
+    )
+    job_store = get_job_store()
+    try:
+        await run_in_threadpool(job_store.put_evaluation, queued)
+        evaluate_dataset.send(
+            job_id,
+            str(target.resolve()),
+            tenant_id,
+            end_to_end,
+            deep_eval,
+        )
+    except Exception as exc:
+        target.unlink(missing_ok=True)
+        raise HTTPException(status_code=503, detail="Evaluation queue is unavailable") from exc
+    return EvaluationAccepted(job_id=job_id)
+
+
+@app.get("/v1/evaluations/{job_id}", response_model=EvaluationJobStatus)
+async def evaluation_status(
+    job_id: str,
+    auth: Annotated[AuthContext, Depends(require_admin_key)],
+) -> EvaluationJobStatus:
+    result = await run_in_threadpool(get_job_store().get_evaluation, job_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Evaluation job not found or expired")
+    authorize_tenant(auth, result.tenant_id)
+    return result

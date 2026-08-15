@@ -33,6 +33,13 @@ class Settings(BaseSettings):
     query_api_key: SecretStr | None = Field(
         default=None, validation_alias="RAG_QUERY_API_KEY"
     )
+    cors_origins: list[str] = Field(
+        default_factory=lambda: [
+            "http://127.0.0.1:4173",
+            "http://localhost:4173",
+        ],
+        validation_alias="RAG_CORS_ORIGINS",
+    )
     tenant_admin_api_keys: dict[str, SecretStr] = Field(
         default_factory=dict, validation_alias="RAG_TENANT_ADMIN_API_KEYS"
     )

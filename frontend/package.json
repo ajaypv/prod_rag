@@ -10,12 +10,10 @@
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.6",
-    "@fontsource-variable/playfair-display": "^5.2.6",
     "@fontsource-variable/source-serif-4": "^5.2.6",
     "@fontsource/ibm-plex-mono": "^5.2.6",
     "@xyflow/react": "^12.9.3",
     "lucide-react": "^0.539.0",
-    "motion": "^12.23.12",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },

@@ -208,6 +208,22 @@ uv run dramatiq prodrag.worker --processes 1 --threads 2
 The import paths in those two commands are lowercase: `prodrag.api:app` and
 `prodrag.worker`. On a case-sensitive host, use the lowercase spelling exactly.
 
+Start the live React Flow console in a third terminal. Use `uv sync --group dev` before starting
+the worker when the UI's optional DeepEval mode is required.
+
+```powershell
+Set-Location .\frontend
+pnpm install --frozen-lockfile
+pnpm dev
+```
+
+Open `http://127.0.0.1:4173`. The console connects to `http://127.0.0.1:8000` by default and shows
+real ingestion history, streamed query stages, retrieved evidence, and background evaluation
+results. Configure browser origins with `RAG_CORS_ORIGINS`; set `VITE_API_BASE_URL` when building
+the frontend against a deployed backend. The GitHub Pages workflow reads `VITE_API_BASE_URL` from
+a repository Actions variable, so set it to the public HTTPS URL of the running prodRAG API before
+deploying the frontend.
+
 For an initial 10–30 document bootstrap, synchronous CLI ingestion is simpler:
 
 ```powershell
@@ -289,10 +305,13 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8000/v1/query -Headers $hea
 Endpoints:
 
 - `POST /v1/documents` — authenticated asynchronous ingestion
-- `GET /v1/ingestions/{job_id}` — ingestion status
+- `GET /v1/ingestions/{job_id}` — ingestion status and persisted stage history
+- `POST /v1/evaluations` — authenticated asynchronous golden-dataset evaluation
+- `GET /v1/evaluations/{job_id}` — evaluation progress, stage history, and final metrics
 - `DELETE /v1/documents/{document_id}?tenant_id={tenant_id}` — authenticated deletion; the
   `tenant_id` query parameter defaults to `default`
 - `POST /v1/query` — authenticated retrieval and grounded answer
+- `POST /v1/query/stream` — query-stage events followed by the answer and evidence
 - `GET /healthz` and `GET /readyz` — liveness and dependency readiness
 - `GET /metrics` — Prometheus request counters and latency histogram buckets for p95 alerts
 
@@ -369,6 +388,49 @@ uv run prodrag-eval .\eval\salesforce-streaming-api.jsonl `
 
 These scores use an LLM judge and should be supplemented with human review of failures and a
 sample of passing cases. A citation marker alone is not treated as proof of factual support.
+
+### DeepEval RAG evaluation
+
+DeepEval is available as an optional development dependency. It complements the existing exact
+document-ID and context-phrase gates with four LLM-as-a-judge metrics recommended for RAG systems:
+
+- contextual recall: whether the retrieved contexts contain enough information for the golden answer;
+- contextual precision: whether relevant contexts are ranked ahead of irrelevant contexts;
+- faithfulness: whether claims in the generated answer are supported by retrieved context; and
+- answer relevancy: whether the generated answer directly addresses the question.
+
+The adapter uses the configured `OCI_CHAT_MODEL` through the existing LangChain OCI client. It does
+not require an OpenAI key, a Confident AI account, or a hosted vector database. Qdrant remains local.
+DeepEval runs only during evaluation and reuses the answer and exact parent contexts already produced
+by `query_with_evidence`; normal user queries make no DeepEval calls.
+
+Install the development group, then run the end-to-end evaluator:
+
+```powershell
+uv sync --group dev
+
+uv run prodrag-eval .\eval\salesforce-streaming-api.jsonl `
+  --end-to-end `
+  --deepeval `
+  --min-recall 0.95 `
+  --min-deepeval-contextual-recall 0.80 `
+  --min-deepeval-contextual-precision 0.70 `
+  --min-deepeval-faithfulness 0.90 `
+  --min-deepeval-answer-relevancy 0.85 `
+  --min-abstention 0.90
+```
+
+Only answerable rows containing `expected_answer` are sent to DeepEval. Negative questions continue
+to use the deterministic `abstention_accuracy` gate. An answerable case that incorrectly abstains, or
+answers without retrieval context, receives zero for all four DeepEval metrics. The JSON report also
+includes per-case scores and judge reasons so failures can be reviewed before release.
+
+Keep the existing deterministic gates in CI: DeepEval metrics make several evaluation-only OCI judge
+calls per golden question, cost more, and are less reproducible than exact label comparisons. Calibrate
+thresholds on a development set, verify them on a held-out set, and manually review borderline cases.
+See the official [DeepEval RAG evaluation guide](https://deepeval.com/docs/getting-started-rag) and
+[custom LLM guide](https://deepeval.com/guides/guides-using-custom-llms) for the underlying metric and
+judge-model contracts.
 
 ## Production checklist
 

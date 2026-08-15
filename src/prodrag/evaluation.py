@@ -4,6 +4,7 @@ import argparse
 import json
 import math
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import BaseModel, Field, model_validator
@@ -40,6 +41,23 @@ class EvaluationCase(BaseModel):
         if not self.expected_answerable and self.expected_context_phrases:
             raise ValueError("Unanswerable rows cannot require context phrases")
         return self
+
+
+@dataclass(frozen=True)
+class RAGEvaluationRecord:
+    """One completed answerable query prepared for external semantic evaluators.
+
+    The record contains the exact answer and parent contexts used by the query
+    pipeline. Keeping this transport type independent of DeepEval means the
+    normal evaluator and production package can still be imported when the
+    optional development dependency is not installed.
+    """
+
+    question: str
+    expected_output: str
+    actual_output: str
+    retrieval_context: tuple[str, ...]
+    answered: bool
 
 
 def load_cases(path: Path) -> list[EvaluationCase]:
@@ -136,7 +154,10 @@ def evaluate(cases: list[EvaluationCase]) -> dict[str, float | int | None]:
 
 
 def evaluate_answers(
-    cases: list[EvaluationCase], *, quality_judge: RAGQualityJudge | None = None
+    cases: list[EvaluationCase],
+    *,
+    quality_judge: RAGQualityJudge | None = None,
+    records: list[RAGEvaluationRecord] | None = None,
 ) -> dict[str, float | int | None]:
     service = get_query_service()
     answerability_matches = 0
@@ -197,6 +218,18 @@ def evaluate_answers(
                 response.requires_human_review == case.expected_human_review
             )
         if case.expected_answerable and case.expected_answer:
+            if records is not None:
+                records.append(
+                    RAGEvaluationRecord(
+                        question=case.question,
+                        expected_output=case.expected_answer,
+                        actual_output=response.answer,
+                        retrieval_context=tuple(
+                            context.document.page_content for context in contexts
+                        ),
+                        answered=response.answered,
+                    )
+                )
             if response.answered and quality_judge is not None:
                 scores = quality_judge.evaluate(
                     question=case.question,
@@ -265,6 +298,14 @@ def main() -> int:
     parser.add_argument("--min-context-precision", type=float, default=0.0)
     parser.add_argument("--min-context-recall", type=float, default=0.0)
     parser.add_argument("--end-to-end", action="store_true")
+    parser.add_argument(
+        "--deepeval",
+        action="store_true",
+        help=(
+            "Run DeepEval contextual recall, contextual precision, faithfulness, "
+            "and answer relevancy metrics using the configured OCI chat model"
+        ),
+    )
     parser.add_argument("--min-answerability", type=float, default=0.0)
     parser.add_argument("--min-citation-hit-rate", type=float, default=0.0)
     parser.add_argument("--min-abstention", type=float, default=0.0)
@@ -272,7 +313,13 @@ def main() -> int:
     parser.add_argument("--min-answer-completeness", type=float, default=0.0)
     parser.add_argument("--min-faithfulness", type=float, default=0.0)
     parser.add_argument("--min-citation-correctness", type=float, default=0.0)
+    parser.add_argument("--min-deepeval-contextual-recall", type=float, default=0.0)
+    parser.add_argument("--min-deepeval-contextual-precision", type=float, default=0.0)
+    parser.add_argument("--min-deepeval-faithfulness", type=float, default=0.0)
+    parser.add_argument("--min-deepeval-answer-relevancy", type=float, default=0.0)
     args = parser.parse_args()
+    if args.deepeval and not args.end_to_end:
+        parser.error("--deepeval requires --end-to-end")
     if not args.end_to_end and any(
         threshold > 0
         for threshold in (
@@ -287,9 +334,40 @@ def main() -> int:
     ):
         parser.error("answer, citation, and abstention gates require --end-to-end")
     cases = load_cases(args.dataset)
-    metrics = evaluate(cases)
+    if args.deepeval and not any(
+        case.expected_answerable and case.expected_answer for case in cases
+    ):
+        parser.error("--deepeval requires at least one answerable row with expected_answer")
+
+    metrics: dict[str, object] = evaluate(cases)
+    deepeval_records: list[RAGEvaluationRecord] = []
     if args.end_to_end:
-        metrics.update(evaluate_answers(cases))
+        metrics.update(
+            evaluate_answers(
+                cases,
+                records=deepeval_records if args.deepeval else None,
+            )
+        )
+    if args.deepeval:
+        try:
+            from prodrag.clients import get_chat_model
+            from prodrag.config import get_settings
+            from prodrag.deepeval_evaluation import (
+                OCIChatDeepEvalModel,
+                evaluate_deepeval,
+            )
+        except ImportError as exc:
+            parser.error(
+                "DeepEval is not installed; run 'uv sync --group dev' before using "
+                f"--deepeval ({exc})"
+            )
+        settings = get_settings()
+        judge = OCIChatDeepEvalModel(
+            get_chat_model(),
+            model_name=settings.oci_chat_model,
+            retry_attempts=settings.model_retry_attempts,
+        )
+        metrics.update(evaluate_deepeval(deepeval_records, judge))
     print(json.dumps(metrics, indent=2))
     passed = (
         metrics["mean_recall"] >= args.min_recall
@@ -315,6 +393,26 @@ def main() -> int:
             and _passes_optional_gate(metrics["faithfulness"], args.min_faithfulness)
             and _passes_optional_gate(
                 metrics["citation_correctness"], args.min_citation_correctness
+            )
+        )
+    if args.deepeval:
+        passed = bool(
+            passed
+            and _passes_optional_gate(
+                metrics["deepeval_contextual_recall"],
+                args.min_deepeval_contextual_recall,
+            )
+            and _passes_optional_gate(
+                metrics["deepeval_contextual_precision"],
+                args.min_deepeval_contextual_precision,
+            )
+            and _passes_optional_gate(
+                metrics["deepeval_faithfulness"],
+                args.min_deepeval_faithfulness,
+            )
+            and _passes_optional_gate(
+                metrics["deepeval_answer_relevancy"],
+                args.min_deepeval_answer_relevancy,
             )
         )
     return 0 if passed else 1

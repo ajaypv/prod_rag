@@ -2,6 +2,7 @@ from langchain_core.documents import Document
 
 from prodrag.config import Settings
 from prodrag.domain import RetrievedCandidate
+from prodrag.models import FlowStatus
 from prodrag.retrieval import RetrievalService
 from prodrag.retrieval.context import ParentContextAssembler
 
@@ -56,9 +57,22 @@ def test_retrieval_filters_low_scores_deduplicates_and_expands_parents() -> None
         ParentContextAssembler(limit=settings.final_contexts),
     )
 
-    results = service.retrieve("reset password", tenant_id="default")
+    events = []
+    results = service.retrieve(
+        "reset password",
+        tenant_id="default",
+        request_id="request-1",
+        on_stage=events.append,
+    )
 
     assert len(results) == 1
     assert results[0].document.page_content == "full parent one"
     assert results[0].final_score == 0.9
     assert index.hybrid_search("reset password")[0].document.page_content == "child one"
+    completed = [event for event in events if event.status == FlowStatus.COMPLETED]
+    assert [event.stage for event in completed] == [
+        "hybrid_retrieval",
+        "rerank",
+        "context",
+    ]
+    assert completed[-1].data["context_count"] == 1

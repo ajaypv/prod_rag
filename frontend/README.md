@@ -1,45 +1,58 @@
-# Groundwork frontend
+# prodRAG Flow Console
 
-Groundwork is a beginner-first RAG learning guide and interview-preparation experience. It uses a
-structured curriculum, plain-language explanations, focused animated diagrams, technical details,
-and short interview answers to teach the complete retrieval-augmented generation flow without
-assuming prior knowledge.
+The frontend is a React/Vite operations console connected to the real prodRAG backend. React Flow
+nodes are driven by backend stage events rather than simulated playback.
 
-The frontend is a standalone React application. It does not require the Python CLI, a model
-provider, or Qdrant because the lessons are explanatory rather than connected to live production
-data. Examples are provider-neutral so learners can apply the concepts to different model and
-vector-database stacks.
+It provides three workflows:
 
-## Learning experience
+- **Ingest** uploads a supported document, polls the durable Redis job, and shows checksum,
+  Docling parsing, parent sectioning, semantic chunking/embedding, and local Qdrant indexing.
+- **Query** consumes the streaming query endpoint and shows triage, dense + BM25 retrieval with RRF,
+  reranking, parent-context assembly, confidence gating, generation, citations, and evidence excerpts.
+- **Evaluate** uploads golden JSONL, polls the evaluation worker, and displays retrieval, answer,
+  abstention, citation, and optional DeepEval metrics.
 
-- Start Here page that explains RAG as **find, select, answer**
-- React Flow hero playground with functional retrieval controls and a live high-DPI evidence canvas
-- Nine lessons ordered from fundamentals through production readiness
-- Interactive React Flow diagrams with an automatically guided stage explanation
-- Optional technical detail sections so the first view stays approachable
-- Scroll-triggered interviewer/candidate conversations with live question progress
-- Watch mode, answer-first practice mode, deep-dive follow-ups, and copy controls
-- Simple glossary cards that open source-backed newspaper chapters with local educational GIFs
-- Numbered links to primary research and official technical documentation
-- Progress saved locally in the browser
-- Responsive sidebar on desktop and a curriculum drawer on mobile
+API and tenant values are saved locally for convenience. Query and admin keys remain only in React
+memory for the current browser tab.
 
-## Run locally
+## Prerequisites
+
+Start Qdrant and Redis, the FastAPI process, and the Dramatiq worker from the repository root. Use
+the development dependency group when the DeepEval UI option is required:
 
 ```powershell
-Set-Location C:\Users\AJay\Documents\ogent\refernce\ocigeniworkshop\prodrag\frontend
-pnpm install
+docker compose up -d
+$env:UV_CACHE_DIR = (Join-Path (Get-Location) '.uv-cache')
+uv sync --group dev
+uv run uvicorn prodrag.api:app --host 0.0.0.0 --port 8000
+```
+
+In a second root terminal:
+
+```powershell
+$env:UV_CACHE_DIR = (Join-Path (Get-Location) '.uv-cache')
+uv run dramatiq prodrag.worker --processes 1 --threads 2
+```
+
+## Run the frontend
+
+```powershell
+Set-Location .\frontend
+pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-Open `http://127.0.0.1:4173`.
-
-## Production build
+Open `http://127.0.0.1:4173`. The default backend is `http://127.0.0.1:8000`; change it in the
+connection panel or provide `VITE_API_BASE_URL` at build time.
 
 ```powershell
+$env:VITE_API_BASE_URL = 'https://rag-api.example.com'
 pnpm build
-pnpm preview
 ```
 
-The optimized static site is written to `dist/`. The project-local `.npmrc` intentionally points
-pnpm at the official npm registry, overriding any inherited corporate registry configuration.
+The backend must allow the frontend origin through `RAG_CORS_ORIGINS`. The project-local `.npmrc`
+points pnpm to the official npm registry.
+
+For GitHub Pages, create a repository Actions variable named `VITE_API_BASE_URL` whose value is the
+public HTTPS URL of the running prodRAG API. The Pages workflow passes that value into the Vite
+build. Add the Pages origin to the backend's `RAG_CORS_ORIGINS` value as well.

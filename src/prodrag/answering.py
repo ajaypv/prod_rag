@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import uuid
 from collections.abc import Sequence
 
@@ -10,9 +11,11 @@ from langchain_core.output_parsers import StrOutputParser
 
 from prodrag.config import Settings
 from prodrag.domain import RetrievedCandidate
+from prodrag.flow import FlowCallback, emit_flow_event
 from prodrag.models import (
     Citation,
     ConfidenceLevel,
+    FlowStatus,
     HumanReviewReason,
     QueryResponse,
     RoutingDestination,
@@ -66,9 +69,15 @@ class GroundedAnswerService:
         *,
         request_id: str | None = None,
         question_triage: QuestionTriage,
+        on_stage: FlowCallback | None = None,
     ) -> QueryResponse:
         request_id = request_id or str(uuid.uuid4())
         if question_triage.sensitive_data_types:
+            self._skip_answer_stages(
+                request_id,
+                on_stage,
+                "Sensitive data was detected during triage",
+            )
             return QueryResponse(
                 request_id=request_id,
                 category=question_triage.category,
@@ -85,8 +94,27 @@ class GroundedAnswerService:
                 sensitive_data_types=list(question_triage.sensitive_data_types),
             )
 
+        gate_started = time.perf_counter()
+        emit_flow_event(
+            on_stage,
+            operation_id=request_id,
+            stage="evidence_gate",
+            status=FlowStatus.RUNNING,
+            message="Checking whether retrieved evidence is strong enough to answer",
+            data={"context_count": len(candidates)},
+        )
         confidence = self.confidence_grader.grade(candidates)
+        emit_flow_event(
+            on_stage,
+            operation_id=request_id,
+            stage="evidence_gate",
+            status=FlowStatus.COMPLETED,
+            message=f"Evidence confidence classified as {confidence.value}",
+            duration_ms=(time.perf_counter() - gate_started) * 1_000,
+            data={"confidence": confidence.value},
+        )
         if not candidates:
+            self._skip_generation(request_id, on_stage, "No retrievable evidence was found")
             return QueryResponse(
                 request_id=request_id,
                 category=question_triage.category,
@@ -102,6 +130,11 @@ class GroundedAnswerService:
                 escalation_reasons=[HumanReviewReason.INSUFFICIENT_CONTEXT],
             )
         if confidence == ConfidenceLevel.LOW:
+            self._skip_generation(
+                request_id,
+                on_stage,
+                "Evidence confidence did not meet the answer threshold",
+            )
             return QueryResponse(
                 request_id=request_id,
                 category=question_triage.category,
@@ -118,6 +151,11 @@ class GroundedAnswerService:
 
         evidence = self.prepare_evidence(candidates)
         if not evidence:
+            self._skip_generation(
+                request_id,
+                on_stage,
+                "No evidence fit within the configured answer context budget",
+            )
             return QueryResponse(
                 request_id=request_id,
                 category=question_triage.category,
@@ -167,6 +205,15 @@ class GroundedAnswerService:
             "question": question,
             "sources": json.dumps(source_payload, ensure_ascii=False),
         }
+        generation_started = time.perf_counter()
+        emit_flow_event(
+            on_stage,
+            operation_id=request_id,
+            stage="generate",
+            status=FlowStatus.RUNNING,
+            message="Generating an answer from the selected evidence only",
+            data={"source_count": len(source_payload)},
+        )
         last_error: Exception | None = None
         for _ in range(self.settings.model_retry_attempts):
             try:
@@ -175,8 +222,32 @@ class GroundedAnswerService:
             except Exception as exc:
                 last_error = exc
         else:
+            emit_flow_event(
+                on_stage,
+                operation_id=request_id,
+                stage="generate",
+                status=FlowStatus.FAILED,
+                message="Answer generation failed after configured retries",
+                duration_ms=(time.perf_counter() - generation_started) * 1_000,
+            )
             raise RuntimeError("Answer generation failed after retries") from last_error
+        emit_flow_event(
+            on_stage,
+            operation_id=request_id,
+            stage="generate",
+            status=FlowStatus.COMPLETED,
+            message="Grounded answer draft generated",
+            duration_ms=(time.perf_counter() - generation_started) * 1_000,
+            data={"answer_characters": len(raw_answer)},
+        )
         if raw_answer == "NOT_FOUND" or not raw_answer:
+            emit_flow_event(
+                on_stage,
+                operation_id=request_id,
+                stage="citations",
+                status=FlowStatus.SKIPPED,
+                message="The model abstained before citation validation",
+            )
             return QueryResponse(
                 request_id=request_id,
                 category=question_triage.category,
@@ -195,11 +266,28 @@ class GroundedAnswerService:
         raw_answer = _CITATION_MARKER_RE.sub(
             lambda match: f"[{match.group(1).upper()}]", raw_answer
         )
+        citation_started = time.perf_counter()
+        emit_flow_event(
+            on_stage,
+            operation_id=request_id,
+            stage="citations",
+            status=FlowStatus.RUNNING,
+            message="Validating cited source IDs against the supplied evidence",
+        )
         cited_source_ids = set(re.findall(r"\[(S\d+)\]", raw_answer))
         used_citations = [
             citation for citation in citations if citation.source_id in cited_source_ids
         ]
         if not used_citations:
+            emit_flow_event(
+                on_stage,
+                operation_id=request_id,
+                stage="citations",
+                status=FlowStatus.COMPLETED,
+                message="No valid evidence citation was found; answer rejected",
+                duration_ms=(time.perf_counter() - citation_started) * 1_000,
+                data={"valid": False},
+            )
             return QueryResponse(
                 request_id=request_id,
                 category=question_triage.category,
@@ -213,6 +301,15 @@ class GroundedAnswerService:
                 ),
                 escalation_reasons=[HumanReviewReason.MISSING_CITATIONS],
             )
+        emit_flow_event(
+            on_stage,
+            operation_id=request_id,
+            stage="citations",
+            status=FlowStatus.COMPLETED,
+            message="Citations validated against retrieved evidence",
+            duration_ms=(time.perf_counter() - citation_started) * 1_000,
+            data={"valid": True, "citation_count": len(used_citations)},
+        )
         return QueryResponse(
             request_id=request_id,
             category=question_triage.category,
@@ -232,3 +329,34 @@ class GroundedAnswerService:
             ),
             citations=used_citations,
         )
+
+    @staticmethod
+    def _skip_generation(
+        request_id: str,
+        callback: FlowCallback | None,
+        reason: str,
+    ) -> None:
+        for stage in ("generate", "citations"):
+            emit_flow_event(
+                callback,
+                operation_id=request_id,
+                stage=stage,
+                status=FlowStatus.SKIPPED,
+                message=reason,
+            )
+
+    @classmethod
+    def _skip_answer_stages(
+        cls,
+        request_id: str,
+        callback: FlowCallback | None,
+        reason: str,
+    ) -> None:
+        emit_flow_event(
+            callback,
+            operation_id=request_id,
+            stage="evidence_gate",
+            status=FlowStatus.SKIPPED,
+            message=reason,
+        )
+        cls._skip_generation(request_id, callback, reason)
