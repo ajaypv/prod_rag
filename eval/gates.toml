@@ -1,0 +1,27 @@
+[absolute]
+mean_recall = 0.95
+hit_rate = 0.95
+mean_context_recall = 0.90
+answerability_accuracy = 0.90
+abstention_accuracy = 0.90
+citation_document_hit_rate = 0.90
+deepeval_contextual_recall = 0.80
+deepeval_contextual_precision = 0.70
+deepeval_faithfulness = 0.90
+deepeval_answer_relevancy = 0.85
+
+[max_regression]
+mean_recall = 0.00
+hit_rate = 0.00
+mean_context_recall = 0.02
+mean_precision = 0.03
+answerability_accuracy = 0.02
+abstention_accuracy = 0.00
+citation_document_hit_rate = 0.02
+deepeval_contextual_recall = 0.03
+deepeval_contextual_precision = 0.03
+deepeval_faithfulness = 0.02
+deepeval_answer_relevancy = 0.02
+
+[max_relative_increase]
+end_to_end_p95_ms = 0.10

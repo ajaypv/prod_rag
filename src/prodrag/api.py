@@ -20,6 +20,7 @@ from prodrag.config import SUPPORTED_EXTENSIONS, get_settings
 from prodrag.container import (
     get_index,
     get_job_store,
+    get_parent_store,
     get_query_service,
 )
 from prodrag.models import (
@@ -111,6 +112,7 @@ async def readyz() -> HealthResponse:
     checks: dict[str, str] = {}
     for name, check in (
         ("qdrant", get_index().ping),
+        ("parent_store", get_parent_store().ping),
         ("redis", get_job_store().ping),
     ):
         try:
@@ -262,6 +264,11 @@ async def delete_document(
         raise HTTPException(status_code=422, detail="Invalid tenant_id")
     authorize_tenant(auth, tenant_id)
     await run_in_threadpool(get_index().delete_document, document_id, tenant_id=tenant_id)
+    await run_in_threadpool(
+        get_parent_store().delete_document,
+        document_id,
+        tenant_id=tenant_id,
+    )
 
 
 @app.post(

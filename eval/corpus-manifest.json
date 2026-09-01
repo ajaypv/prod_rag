@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "name": "b2b-saas-ci",
+  "tenant_id": "demo",
+  "product": "nimbusflow",
+  "version": "1.0",
+  "files": [
+    {"path": "samples/b2b-saas/api-authentication.md", "sha256": "43bd5a953d882e5fc2b32cde1c89afcb6682263a2931f643e491ad6f4586ffd1"},
+    {"path": "samples/b2b-saas/api-rate-limits.md", "sha256": "7e1425de3303554679bd34e48c311362f9539f0447e5dde1b916686544fefc24"},
+    {"path": "samples/b2b-saas/billing-invoices.md", "sha256": "f146df7258bbf044afffccebae22356590b3b6a3b411be6351036edb75ee96c6"},
+    {"path": "samples/b2b-saas/error-codes.md", "sha256": "925e654561bdef489a67998f5961bacba6d83f72ddd95d4ed0cffd2f7202a029"},
+    {"path": "samples/b2b-saas/frequently-asked-questions.html", "sha256": "fe74237e9b1ffa4a4693eeb67fbf4fa32427ffa3a54c7e241f7d84184bf15804"},
+    {"path": "samples/b2b-saas/plans-usage.md", "sha256": "a41c41f09a42b4aa4a58f46519a8c74cc27375bb924dbae82692b10151486457"},
+    {"path": "samples/b2b-saas/salesforce-integration.md", "sha256": "cf527bb65b90a396f51cbc6564e29d7c802ed04f725509daa401f5135d278f8d"},
+    {"path": "samples/b2b-saas/support-escalation.md", "sha256": "c7d302d2d6f6608434e30bc0b8a53e9cc884d50916e8842da136196a625e1dbc"},
+    {"path": "samples/b2b-saas/webhooks.md", "sha256": "41af41c9fd7ae11c78ce466d038efed9502bb06420b819ab00324badf59f21eb"}
+  ]
+}
+ 

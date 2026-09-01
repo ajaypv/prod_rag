@@ -22,6 +22,7 @@ from prodrag.models import (
 )
 from prodrag.prompts import ANSWER_PROMPT
 from prodrag.retrieval.confidence import ConfidenceGrader
+from prodrag.tokenization import conservative_token_count, take_markdown_prefix
 from prodrag.triage import QuestionTriage
 
 _CITATION_MARKER_RE = re.compile(r"(?:\[|\u3010)\s*(S\d+)\s*(?:\]|\u3011)", re.IGNORECASE)
@@ -41,13 +42,25 @@ class GroundedAnswerService:
     def prepare_evidence(
         self, candidates: Sequence[RetrievedCandidate]
     ) -> list[RetrievedCandidate]:
-        """Return the exact ranked/truncated contexts that fit in the answer prompt budget."""
+        """Pack ranked evidence using token and character budgets at safe block boundaries."""
         evidence: list[RetrievedCandidate] = []
-        remaining = self.settings.context_char_budget
+        remaining_chars = self.settings.context_char_budget
+        remaining_tokens = self.settings.context_token_budget
         for candidate in candidates:
-            if remaining <= 0:
+            if remaining_chars <= 0 or remaining_tokens <= 0:
                 break
-            content = candidate.document.page_content[:remaining]
+            original = candidate.document.page_content
+            if (
+                len(original) <= remaining_chars
+                and conservative_token_count(original) <= remaining_tokens
+            ):
+                content = original
+            else:
+                content = take_markdown_prefix(
+                    original,
+                    max_tokens=remaining_tokens,
+                    max_chars=remaining_chars,
+                )
             if not content:
                 continue
             evidence.append(
@@ -59,7 +72,8 @@ class GroundedAnswerService:
                     rerank_score=candidate.rerank_score,
                 )
             )
-            remaining -= len(content)
+            remaining_chars -= len(content)
+            remaining_tokens -= conservative_token_count(content)
         return evidence
 
     def answer(

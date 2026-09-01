@@ -6,7 +6,7 @@ nodes are driven by backend stage events rather than simulated playback.
 It provides three workflows:
 
 - **Ingest** uploads a supported document, polls the durable Redis job, and shows checksum,
-  Docling parsing, parent sectioning, semantic chunking/embedding, and local Qdrant indexing.
+  Docling parsing, SQLite parent storage, semantic chunking/embedding, and local Qdrant indexing.
 - **Query** consumes the streaming query endpoint and shows triage, dense + BM25 retrieval with RRF,
   reranking, parent-context assembly, confidence gating, generation, citations, and evidence excerpts.
 - **Evaluate** uploads golden JSONL, polls the evaluation worker, and displays retrieval, answer,

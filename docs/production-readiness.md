@@ -1,6 +1,6 @@
 # Production readiness status
 
-Status snapshot: 2026-08-11.
+Status snapshot: 2026-08-18.
 
 ## Completed locally
 
@@ -19,7 +19,13 @@ Status snapshot: 2026-08-11.
   and citation document hit rate at 1.00.
 - JSON retrieval traces contain request ID, metadata scope, elapsed time, result count, and scores.
   `/metrics` exports HTTP latency histogram buckets suitable for Prometheus p95 calculations.
-- The regression suite passes with 42 tests. Ruff and `git diff --check` pass.
+- Parent sections now have character and conservative-token limits. Every split part repeats its
+  heading hierarchy and persists part numbers plus previous/next references. Parent splitting keeps
+  ordinary paragraphs, loose lists, tables, and fenced code intact while they fit.
+- Retrieval expands a matched parent with complete adjacent parts only within a separate token cap.
+  Answer evidence is packed under token and character budgets and stops at Markdown block
+  boundaries instead of cutting the last context in the middle of a paragraph.
+- The regression suite, Ruff, and `git diff --check` pass locally.
 
 ## Blocking production deployment
 
@@ -36,6 +42,18 @@ Status snapshot: 2026-08-11.
 - The deployment owner must provide persistent encrypted Qdrant and Redis volumes, backups, private
   networking, TLS, rate limits, production secrets, at least two API replicas, metrics scraping,
   alert routing, and ticket-system integration.
+- Full parent sections now persist in local SQLite while Qdrant stores child text, vectors, and
+  parent references. This is appropriate for the current single-host deployment. Multi-host API or
+  worker replicas require a shared `ParentStore` implementation (for example PostgreSQL), plus
+  encryption and coordinated backups with Qdrant.
+- Markdown tables and fenced code now retain dedicated child boundaries. Parent splitting also keeps
+  loose lists atomic while they fit, but lists, blockquotes, admonitions, formulas, and image/chart
+  captions do not yet have dedicated *child* policies. Child metadata also does not expose content
+  type, code language, row span, or a chunking-strategy version. All hard token limits use the same
+  conservative counter because OCI Embed 4 does not expose its tokenizer through the inference API;
+  validate limits against real model calls after a tokenizer or official counting endpoint exists.
+- The 2026-08-11 quality scores above are a historical baseline. Reingest the corpus and rerun the
+  golden retrieval and end-to-end evaluations after these chunking changes before accepting them.
 
 Do not label this deployment production-ready until these blockers are closed and a representative
 concurrent load test confirms the latency target.

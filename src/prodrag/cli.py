@@ -11,6 +11,7 @@ from prodrag.config import SUPPORTED_EXTENSIONS
 from prodrag.container import (
     get_index,
     get_ingestion_service,
+    get_parent_store,
     get_query_service,
 )
 from prodrag.models import QueryRequest
@@ -65,6 +66,7 @@ def _query(args: argparse.Namespace) -> int:
 
 def _delete(args: argparse.Namespace) -> int:
     get_index().delete_document(args.document_id, tenant_id=args.tenant)
+    get_parent_store().delete_document(args.document_id, tenant_id=args.tenant)
     print(json.dumps({"deleted": args.document_id, "tenant_id": args.tenant}))
     return 0
 

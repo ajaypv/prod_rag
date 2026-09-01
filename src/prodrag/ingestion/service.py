@@ -14,6 +14,7 @@ from prodrag.flow import FlowCallback, emit_flow_event
 from prodrag.ingestion.chunking import ChunkingStrategy
 from prodrag.ingestion.parsing import DoclingParser, MarkdownSectioner
 from prodrag.models import FlowStatus, IngestionResult
+from prodrag.parent_store import ParentStore
 from prodrag.vector_store import QdrantIndex
 
 _POINT_NAMESPACE = uuid.UUID("b8297a7c-3f58-4e30-bf8a-a33c8f3752bd")
@@ -34,11 +35,13 @@ class IngestionService:
         parser: DoclingParser,
         sectioner: MarkdownSectioner,
         chunker: ChunkingStrategy,
+        parent_store: ParentStore,
         index: QdrantIndex,
     ) -> None:
         self.parser = parser
         self.sectioner = sectioner
         self.chunker = chunker
+        self.parent_store = parent_store
         self.index = index
 
     def ingest(
@@ -86,6 +89,22 @@ class IngestionService:
             on_stage,
             data=lambda value: {"parent_count": len(value)},
         )
+        self._run_stage(
+            operation_id,
+            "parent_store",
+            "Persisting parent sections in the local document store",
+            "Parent sections stored in SQLite",
+            lambda: self.parent_store.upsert_revision(
+                sections,
+                tenant_id=tenant_id,
+                document_id=document_id,
+                checksum=checksum,
+                product=product,
+                version=version,
+            ),
+            on_stage,
+            data=lambda _: {"parent_count": len(sections)},
+        )
         documents, point_ids = self._run_stage(
             operation_id,
             "chunk_embed",
@@ -108,9 +127,9 @@ class IngestionService:
             "index",
             "Writing the new revision to local Qdrant",
             "Local hybrid-search index updated",
-            lambda: self.index.upsert_revision(
-                documents,
-                point_ids,
+            lambda: self._publish_revision(
+                documents=documents,
+                point_ids=point_ids,
                 document_id=document_id,
                 checksum=checksum,
                 tenant_id=tenant_id,
@@ -171,6 +190,31 @@ class IngestionService:
         )
         return result
 
+    def _publish_revision(
+        self,
+        *,
+        documents: list[Document],
+        point_ids: list[str],
+        document_id: str,
+        checksum: str,
+        tenant_id: str,
+    ) -> None:
+        # Parents are written before children, so a ready Qdrant point never references a
+        # parent that has not been persisted. Old parents are retained until the new child
+        # revision is successfully published; this keeps failed ingestion retries safe.
+        self.index.upsert_revision(
+            documents,
+            point_ids,
+            document_id=document_id,
+            checksum=checksum,
+            tenant_id=tenant_id,
+        )
+        self.parent_store.prune_revision(
+            checksum,
+            tenant_id=tenant_id,
+            document_id=document_id,
+        )
+
     def _build_child_documents(
         self,
         parsed: ParsedDocument,
@@ -208,9 +252,13 @@ class IngestionService:
                     "section": section.heading,
                     "section_order": section.order,
                     "parent_id": section.section_id,
-                    "parent_text": section.text,
+                    "parent_part": section.part,
+                    "parent_part_count": section.part_count,
+                    "previous_parent_id": section.previous_parent_id,
+                    "next_parent_id": section.next_parent_id,
                     "chunk_id": point_id,
                     "chunk_order": child_order,
+                    "parent_chunk_count": len(chunks),
                     # Qdrant search excludes this revision until every chunk is uploaded.
                     "revision_ready": False,
                 }

@@ -14,6 +14,7 @@ dependencies = [
     "langchain-core>=1.2.22,<2",
     "langchain-oci>=0.3.1,<1",
     "langchain-qdrant>=1.1.0,<2",
+    "langchain-text-splitters==1.1.2",
     "numpy>=2.2.0,<3",
     "oci>=2.183.0,<3",
     "pydantic-settings>=2.10.0,<3",
@@ -36,6 +37,7 @@ dev = [
 [project.scripts]
 prodrag = "prodrag.cli:main"
 prodrag-eval = "prodrag.evaluation:main"
+prodrag-compare = "prodrag.ab_testing:main"
 
 [build-system]
 requires = ["hatchling"]

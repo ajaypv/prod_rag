@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
+import os
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic import BaseModel, Field, model_validator
@@ -75,7 +78,11 @@ def load_cases(path: Path) -> list[EvaluationCase]:
     return cases
 
 
-def evaluate(cases: list[EvaluationCase]) -> dict[str, float | int | None]:
+def evaluate(
+    cases: list[EvaluationCase],
+    *,
+    case_results: list[dict[str, object]] | None = None,
+) -> dict[str, float | int | None]:
     service = get_retrieval_service()
     recalls: list[float] = []
     precisions: list[float] = []
@@ -96,9 +103,20 @@ def evaluate(cases: list[EvaluationCase]) -> dict[str, float | int | None]:
         )
         durations.append(time.perf_counter() - started)
         ranked_ids = [str(item.document.metadata.get("document_id")) for item in results]
+        duration_ms = round(durations[-1] * 1_000, 3)
         if not case.expected_answerable:
             unanswerable_count += 1
             correct_abstentions += int(not ranked_ids)
+            if case_results is not None:
+                case_results.append(
+                    {
+                        "question": case.question,
+                        "expected_answerable": False,
+                        "retrieved_document_ids": ranked_ids,
+                        "empty_retrieval": not ranked_ids,
+                        "duration_ms": duration_ms,
+                    }
+                )
             continue
         expected = set(case.expected_document_ids)
         returned = set(ranked_ids)
@@ -115,6 +133,8 @@ def evaluate(cases: list[EvaluationCase]) -> dict[str, float | int | None]:
             None,
         )
         reciprocal_ranks.append(1 / first_rank if first_rank else 0.0)
+        context_precision: float | None = None
+        context_recall: float | None = None
         if case.expected_context_phrases:
             phrases = [phrase.casefold() for phrase in case.expected_context_phrases]
             context_texts = [item.document.page_content.casefold() for item in results]
@@ -124,10 +144,25 @@ def evaluate(cases: list[EvaluationCase]) -> dict[str, float | int | None]:
             found_phrases = sum(
                 any(phrase in context for context in context_texts) for phrase in phrases
             )
-            context_precisions.append(
-                relevant_contexts / len(context_texts) if context_texts else 0.0
+            context_precision = relevant_contexts / len(context_texts) if context_texts else 0.0
+            context_recall = found_phrases / len(phrases)
+            context_precisions.append(context_precision)
+            context_recalls.append(context_recall)
+        if case_results is not None:
+            case_results.append(
+                {
+                    "question": case.question,
+                    "expected_answerable": True,
+                    "expected_document_ids": case.expected_document_ids,
+                    "retrieved_document_ids": ranked_ids,
+                    "recall": recalls[-1],
+                    "precision": precisions[-1],
+                    "reciprocal_rank": reciprocal_ranks[-1],
+                    "context_precision": context_precision,
+                    "context_recall": context_recall,
+                    "duration_ms": duration_ms,
+                }
             )
-            context_recalls.append(found_phrases / len(phrases))
     count = len(recalls)
     return {
         "questions": len(cases),
@@ -158,6 +193,7 @@ def evaluate_answers(
     *,
     quality_judge: RAGQualityJudge | None = None,
     records: list[RAGEvaluationRecord] | None = None,
+    case_results: list[dict[str, object]] | None = None,
 ) -> dict[str, float | int | None]:
     service = get_query_service()
     answerability_matches = 0
@@ -217,6 +253,7 @@ def evaluate_answers(
             review_matches += int(
                 response.requires_human_review == case.expected_human_review
             )
+        quality_scores: dict[str, float] | None = None
         if case.expected_answerable and case.expected_answer:
             if records is not None:
                 records.append(
@@ -241,6 +278,12 @@ def evaluate_answers(
                 completeness_scores.append(scores.completeness)
                 faithfulness_scores.append(scores.faithfulness)
                 citation_correctness_scores.append(scores.citation_correctness)
+                quality_scores = {
+                    "correctness": scores.correctness,
+                    "completeness": scores.completeness,
+                    "faithfulness": scores.faithfulness,
+                    "citation_correctness": scores.citation_correctness,
+                }
             else:
                 # An answerable golden question that the pipeline refused cannot receive
                 # generation-quality credit merely because it failed safely.
@@ -248,6 +291,29 @@ def evaluate_answers(
                 completeness_scores.append(0.0)
                 faithfulness_scores.append(0.0)
                 citation_correctness_scores.append(0.0)
+                quality_scores = {
+                    "correctness": 0.0,
+                    "completeness": 0.0,
+                    "faithfulness": 0.0,
+                    "citation_correctness": 0.0,
+                }
+        if case_results is not None:
+            case_results.append(
+                {
+                    "question": case.question,
+                    "expected_answerable": case.expected_answerable,
+                    "answered": response.answered,
+                    "actual_output": response.answer,
+                    "cited_document_ids": [
+                        citation.document_id for citation in response.citations
+                    ],
+                    "retrieval_context": [
+                        context.document.page_content for context in contexts
+                    ],
+                    "quality_scores": quality_scores,
+                    "duration_ms": round(durations[-1] * 1_000, 3),
+                }
+            )
 
     return {
         "answerability_accuracy": answerability_matches / len(cases),
@@ -284,9 +350,78 @@ def _passes_optional_gate(value: object, threshold: float) -> bool:
     return isinstance(value, int | float) and value >= threshold
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while block := source.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _gate_results(
+    metrics: dict[str, object],
+    thresholds: dict[str, float],
+) -> dict[str, dict[str, object]]:
+    results: dict[str, dict[str, object]] = {}
+    for metric, threshold in thresholds.items():
+        value = metrics.get(metric)
+        enabled = threshold > 0
+        passed = not enabled or (
+            isinstance(value, int | float) and not isinstance(value, bool) and value >= threshold
+        )
+        results[metric] = {
+            "value": value,
+            "minimum": threshold,
+            "enabled": enabled,
+            "passed": passed,
+        }
+    return results
+
+
+def _evaluation_metadata(dataset: Path, variant: str) -> dict[str, object]:
+    from prodrag.config import get_settings
+
+    settings = get_settings()
+    return {
+        "schema_version": 1,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "variant": variant,
+        "git_sha": os.getenv("PRODRAG_EVAL_GIT_SHA", "unknown"),
+        "dataset": str(dataset.resolve()),
+        "dataset_sha256": _sha256_file(dataset),
+        "corpus_manifest_sha256": os.getenv("PRODRAG_CORPUS_MANIFEST_SHA256"),
+        "configuration": {
+            "oci_embed_model": settings.oci_embed_model,
+            "oci_embed_dimension": settings.oci_embed_dimension,
+            "oci_rerank_enabled": settings.oci_rerank_enabled,
+            "oci_rerank_model": settings.oci_rerank_model,
+            "oci_chat_model": settings.oci_chat_model,
+            "qdrant_mode": "embedded_exact" if settings.qdrant_path else "server_hnsw",
+            "qdrant_collection": settings.qdrant_collection,
+            "bm25_model": settings.bm25_model,
+            "parent_max_tokens": settings.parent_max_tokens,
+            "parent_max_chars": settings.parent_max_chars,
+            "chunk_size_tokens": settings.chunk_size_tokens,
+            "semantic_threshold": settings.semantic_threshold,
+            "retrieval_candidates": settings.retrieval_candidates,
+            "final_contexts": settings.final_contexts,
+        },
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Evaluate prodRAG retrieval against JSONL labels")
     parser.add_argument("dataset", type=Path)
+    parser.add_argument(
+        "--output",
+        type=Path,
+        help="Write the complete machine-readable evaluation report to this JSON file",
+    )
+    parser.add_argument(
+        "--variant",
+        default=os.getenv("PRODRAG_EVAL_VARIANT", "candidate"),
+        help="Variant label recorded in the report (for example baseline or candidate)",
+    )
     parser.add_argument("--min-recall", type=float, default=0.95)
     parser.add_argument(
         "--min-precision",
@@ -339,13 +474,16 @@ def main() -> int:
     ):
         parser.error("--deepeval requires at least one answerable row with expected_answer")
 
-    metrics: dict[str, object] = evaluate(cases)
+    retrieval_case_results: list[dict[str, object]] = []
+    answer_case_results: list[dict[str, object]] = []
+    metrics: dict[str, object] = evaluate(cases, case_results=retrieval_case_results)
     deepeval_records: list[RAGEvaluationRecord] = []
     if args.end_to_end:
         metrics.update(
             evaluate_answers(
                 cases,
                 records=deepeval_records if args.deepeval else None,
+                case_results=answer_case_results,
             )
         )
     if args.deepeval:
@@ -368,53 +506,52 @@ def main() -> int:
             retry_attempts=settings.model_retry_attempts,
         )
         metrics.update(evaluate_deepeval(deepeval_records, judge))
-    print(json.dumps(metrics, indent=2))
-    passed = (
-        metrics["mean_recall"] >= args.min_recall
-        and metrics["mean_precision"] >= args.min_precision
-        and metrics["hit_rate"] >= args.min_hit_rate
-        and _passes_optional_gate(
-            metrics["mean_context_precision"], args.min_context_precision
-        )
-        and _passes_optional_gate(metrics["mean_context_recall"], args.min_context_recall)
-    )
+    thresholds = {
+        "mean_recall": args.min_recall,
+        "mean_precision": args.min_precision,
+        "hit_rate": args.min_hit_rate,
+        "mean_context_precision": args.min_context_precision,
+        "mean_context_recall": args.min_context_recall,
+    }
     if args.end_to_end:
-        passed = bool(
-            passed
-            and metrics["answerability_accuracy"] >= args.min_answerability
-            and metrics["citation_document_hit_rate"] >= args.min_citation_hit_rate
-            and metrics["abstention_accuracy"] >= args.min_abstention
-            and _passes_optional_gate(
-                metrics["answer_correctness"], args.min_answer_correctness
-            )
-            and _passes_optional_gate(
-                metrics["answer_completeness"], args.min_answer_completeness
-            )
-            and _passes_optional_gate(metrics["faithfulness"], args.min_faithfulness)
-            and _passes_optional_gate(
-                metrics["citation_correctness"], args.min_citation_correctness
-            )
+        thresholds.update(
+            {
+                "answerability_accuracy": args.min_answerability,
+                "citation_document_hit_rate": args.min_citation_hit_rate,
+                "abstention_accuracy": args.min_abstention,
+                "answer_correctness": args.min_answer_correctness,
+                "answer_completeness": args.min_answer_completeness,
+                "faithfulness": args.min_faithfulness,
+                "citation_correctness": args.min_citation_correctness,
+            }
         )
     if args.deepeval:
-        passed = bool(
-            passed
-            and _passes_optional_gate(
-                metrics["deepeval_contextual_recall"],
-                args.min_deepeval_contextual_recall,
-            )
-            and _passes_optional_gate(
-                metrics["deepeval_contextual_precision"],
-                args.min_deepeval_contextual_precision,
-            )
-            and _passes_optional_gate(
-                metrics["deepeval_faithfulness"],
-                args.min_deepeval_faithfulness,
-            )
-            and _passes_optional_gate(
-                metrics["deepeval_answer_relevancy"],
-                args.min_deepeval_answer_relevancy,
-            )
+        thresholds.update(
+            {
+                "deepeval_contextual_recall": args.min_deepeval_contextual_recall,
+                "deepeval_contextual_precision": args.min_deepeval_contextual_precision,
+                "deepeval_faithfulness": args.min_deepeval_faithfulness,
+                "deepeval_answer_relevancy": args.min_deepeval_answer_relevancy,
+            }
         )
+
+    gate_results = _gate_results(metrics, thresholds)
+    failed_gates = [name for name, result in gate_results.items() if not result["passed"]]
+    passed = not failed_gates
+    report = {
+        **metrics,
+        "metadata": _evaluation_metadata(args.dataset, args.variant),
+        "retrieval_case_results": retrieval_case_results,
+        "answer_case_results": answer_case_results,
+        "gate_results": gate_results,
+        "failed_gates": failed_gates,
+        "passed": passed,
+    }
+    serialized = json.dumps(report, indent=2)
+    print(serialized)
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(serialized + "\n", encoding="utf-8")
     return 0 if passed else 1
 
 

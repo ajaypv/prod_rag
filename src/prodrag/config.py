@@ -95,6 +95,9 @@ class Settings(BaseSettings):
     bm25_language: Literal["english"] = Field(
         default="english", validation_alias="RAG_BM25_LANGUAGE"
     )
+    parent_store_path: Path = Field(
+        default=Path("./data/parents.sqlite3"), validation_alias="RAG_PARENT_STORE_PATH"
+    )
     redis_url: str = Field(default="redis://localhost:6379/0", validation_alias="REDIS_URL")
 
     max_file_mb: int = Field(default=25, ge=1, le=200, validation_alias="RAG_MAX_FILE_MB")
@@ -111,7 +114,10 @@ class Settings(BaseSettings):
         default=True, validation_alias="RAG_PDF_FORCE_BACKEND_TEXT"
     )
     parent_max_chars: int = Field(
-        default=12_000, ge=2_000, le=50_000, validation_alias="RAG_PARENT_MAX_CHARS"
+        default=8_000, ge=2_000, le=50_000, validation_alias="RAG_PARENT_MAX_CHARS"
+    )
+    parent_max_tokens: int = Field(
+        default=2_000, ge=256, le=16_000, validation_alias="RAG_PARENT_MAX_TOKENS"
     )
     chunk_size_tokens: int = Field(
         default=450, ge=100, le=2_000, validation_alias="RAG_CHUNK_SIZE_TOKENS"
@@ -142,6 +148,18 @@ class Settings(BaseSettings):
     )
     context_char_budget: int = Field(
         default=30_000, ge=4_000, le=100_000, validation_alias="RAG_CONTEXT_CHAR_BUDGET"
+    )
+    context_token_budget: int = Field(
+        default=7_500, ge=1_000, le=100_000, validation_alias="RAG_CONTEXT_TOKEN_BUDGET"
+    )
+    parent_neighbor_count: int = Field(
+        default=1, ge=0, le=2, validation_alias="RAG_PARENT_NEIGHBOR_COUNT"
+    )
+    expanded_parent_max_tokens: int = Field(
+        default=3_000,
+        ge=512,
+        le=32_000,
+        validation_alias="RAG_EXPANDED_PARENT_MAX_TOKENS",
     )
     job_ttl_seconds: int = Field(default=604_800, ge=3_600, validation_alias="RAG_JOB_TTL")
     query_timeout_seconds: float = Field(
@@ -191,6 +209,11 @@ class Settings(BaseSettings):
             raise ValueError(
                 "QDRANT_HNSW_ENABLED requires a Qdrant server via QDRANT_URL; "
                 "embedded QDRANT_PATH mode uses exact in-process search"
+            )
+        if self.expanded_parent_max_tokens < self.parent_max_tokens:
+            raise ValueError(
+                "RAG_EXPANDED_PARENT_MAX_TOKENS must be at least "
+                "RAG_PARENT_MAX_TOKENS"
             )
         if self.environment != "production":
             return self
