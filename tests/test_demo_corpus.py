@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 
@@ -48,3 +49,20 @@ def test_demo_query_expectations_use_public_response_categories() -> None:
     }
     assert any(case["expected_human_review"] for case in cases)
     assert any(not case["expected_human_review"] for case in cases)
+
+
+def test_ci_corpus_manifest_and_goldens_are_reproducible() -> None:
+    manifest = json.loads(
+        (PROJECT_ROOT / "eval" / "corpus-manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["tenant_id"] == "demo"
+    assert len(manifest["files"]) == 9
+    for entry in manifest["files"]:
+        source = (PROJECT_ROOT / entry["path"]).resolve(strict=True)
+        assert source.is_relative_to(PROJECT_ROOT)
+        assert hashlib.sha256(source.read_bytes()).hexdigest() == entry["sha256"]
+
+    cases = load_cases(PROJECT_ROOT / "eval" / "b2b-saas-ci.jsonl")
+    assert len(cases) == 11
+    assert sum(bool(case.expected_answer) for case in cases) == 9
+    assert sum(not case.expected_answerable for case in cases) == 2

@@ -13,6 +13,7 @@ def test_parent_and_answer_budget_defaults(monkeypatch: pytest.MonkeyPatch) -> N
         "RAG_CONTEXT_TOKEN_BUDGET",
         "RAG_PARENT_NEIGHBOR_COUNT",
         "RAG_EXPANDED_PARENT_MAX_TOKENS",
+        "RAG_EVAL_MAX_TOKENS",
     ):
         monkeypatch.delenv(name, raising=False)
     settings = Settings(_env_file=None)
@@ -24,6 +25,7 @@ def test_parent_and_answer_budget_defaults(monkeypatch: pytest.MonkeyPatch) -> N
     assert settings.context_token_budget == 7_500
     assert settings.parent_neighbor_count == 1
     assert settings.expanded_parent_max_tokens == 3_000
+    assert settings.oci_eval_max_tokens == 4_000
 
 
 def test_neighbor_expansion_cannot_be_smaller_than_one_parent() -> None:

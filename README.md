@@ -479,7 +479,8 @@ document-ID and context-phrase gates with four LLM-as-a-judge metrics recommende
 - faithfulness: whether claims in the generated answer are supported by retrieved context; and
 - answer relevancy: whether the generated answer directly addresses the question.
 
-The adapter uses the configured `OCI_CHAT_MODEL` through the existing LangChain OCI client. It does
+The adapter uses the configured `OCI_CHAT_MODEL` through the existing LangChain OCI client, with a
+separate `RAG_EVAL_MAX_TOKENS=4000` output budget for DeepEval's larger structured judgments. It does
 not require an OpenAI key, a Confident AI account, or a hosted vector database. Qdrant remains local.
 DeepEval runs only during evaluation and reuses the answer and exact parent contexts already produced
 by `query_with_evidence`; normal user queries make no DeepEval calls.
@@ -511,6 +512,9 @@ thresholds on a development set, verify them on a held-out set, and manually rev
 See the official [DeepEval RAG evaluation guide](https://deepeval.com/docs/getting-started-rag) and
 [custom LLM guide](https://deepeval.com/guides/guides-using-custom-llms) for the underlying metric and
 judge-model contracts.
+
+For the local-only GitLab A/B release gate, reproducible corpus, CI variables, and baseline bootstrap
+procedure, see [GitLab CI/CD RAG evaluation gate](docs/gitlab-evaluation.md).
 
 ## Production checklist
 

@@ -5,7 +5,10 @@ import hashlib
 import json
 import math
 import os
+import sys
+import textwrap
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,6 +18,8 @@ from pydantic import BaseModel, Field, model_validator
 from prodrag.container import get_quality_judge, get_query_service, get_retrieval_service
 from prodrag.models import QueryRequest, TicketCategory
 from prodrag.quality import RAGQualityJudge
+
+ProgressCallback = Callable[[str, dict[str, object]], None]
 
 
 def _p95_ms(durations: list[float]) -> float:
@@ -82,6 +87,7 @@ def evaluate(
     cases: list[EvaluationCase],
     *,
     case_results: list[dict[str, object]] | None = None,
+    progress: ProgressCallback | None = None,
 ) -> dict[str, float | int | None]:
     service = get_retrieval_service()
     recalls: list[float] = []
@@ -93,7 +99,7 @@ def evaluate(
     durations: list[float] = []
     context_precisions: list[float] = []
     context_recalls: list[float] = []
-    for case in cases:
+    for case_index, case in enumerate(cases, start=1):
         started = time.perf_counter()
         results = service.retrieve(
             case.question,
@@ -107,16 +113,20 @@ def evaluate(
         if not case.expected_answerable:
             unanswerable_count += 1
             correct_abstentions += int(not ranked_ids)
+            detail = {
+                "case": case_index,
+                "total": len(cases),
+                "question": case.question,
+                "expected_answerable": False,
+                "expected_document_ids": [],
+                "retrieved_document_ids": ranked_ids,
+                "empty_retrieval": not ranked_ids,
+                "duration_ms": duration_ms,
+            }
             if case_results is not None:
-                case_results.append(
-                    {
-                        "question": case.question,
-                        "expected_answerable": False,
-                        "retrieved_document_ids": ranked_ids,
-                        "empty_retrieval": not ranked_ids,
-                        "duration_ms": duration_ms,
-                    }
-                )
+                case_results.append(detail)
+            if progress is not None:
+                progress("retrieval_case", detail)
             continue
         expected = set(case.expected_document_ids)
         returned = set(ranked_ids)
@@ -148,21 +158,24 @@ def evaluate(
             context_recall = found_phrases / len(phrases)
             context_precisions.append(context_precision)
             context_recalls.append(context_recall)
+        detail = {
+            "case": case_index,
+            "total": len(cases),
+            "question": case.question,
+            "expected_answerable": True,
+            "expected_document_ids": case.expected_document_ids,
+            "retrieved_document_ids": ranked_ids,
+            "recall": recalls[-1],
+            "precision": precisions[-1],
+            "reciprocal_rank": reciprocal_ranks[-1],
+            "context_precision": context_precision,
+            "context_recall": context_recall,
+            "duration_ms": duration_ms,
+        }
         if case_results is not None:
-            case_results.append(
-                {
-                    "question": case.question,
-                    "expected_answerable": True,
-                    "expected_document_ids": case.expected_document_ids,
-                    "retrieved_document_ids": ranked_ids,
-                    "recall": recalls[-1],
-                    "precision": precisions[-1],
-                    "reciprocal_rank": reciprocal_ranks[-1],
-                    "context_precision": context_precision,
-                    "context_recall": context_recall,
-                    "duration_ms": duration_ms,
-                }
-            )
+            case_results.append(detail)
+        if progress is not None:
+            progress("retrieval_case", detail)
     count = len(recalls)
     return {
         "questions": len(cases),
@@ -194,6 +207,7 @@ def evaluate_answers(
     quality_judge: RAGQualityJudge | None = None,
     records: list[RAGEvaluationRecord] | None = None,
     case_results: list[dict[str, object]] | None = None,
+    progress: ProgressCallback | None = None,
 ) -> dict[str, float | int | None]:
     service = get_query_service()
     answerability_matches = 0
@@ -217,7 +231,7 @@ def evaluate_answers(
     ):
         quality_judge = get_quality_judge()
 
-    for case in cases:
+    for case_index, case in enumerate(cases, start=1):
         started = time.perf_counter()
         request = QueryRequest(
             question=case.question,
@@ -297,23 +311,23 @@ def evaluate_answers(
                     "faithfulness": 0.0,
                     "citation_correctness": 0.0,
                 }
+        detail = {
+            "case": case_index,
+            "total": len(cases),
+            "question": case.question,
+            "expected_answerable": case.expected_answerable,
+            "expected_output": case.expected_answer,
+            "answered": response.answered,
+            "actual_output": response.answer,
+            "cited_document_ids": [citation.document_id for citation in response.citations],
+            "retrieval_context": [context.document.page_content for context in contexts],
+            "quality_scores": quality_scores,
+            "duration_ms": round(durations[-1] * 1_000, 3),
+        }
         if case_results is not None:
-            case_results.append(
-                {
-                    "question": case.question,
-                    "expected_answerable": case.expected_answerable,
-                    "answered": response.answered,
-                    "actual_output": response.answer,
-                    "cited_document_ids": [
-                        citation.document_id for citation in response.citations
-                    ],
-                    "retrieval_context": [
-                        context.document.page_content for context in contexts
-                    ],
-                    "quality_scores": quality_scores,
-                    "duration_ms": round(durations[-1] * 1_000, 3),
-                }
-            )
+            case_results.append(detail)
+        if progress is not None:
+            progress("answer_case", detail)
 
     return {
         "answerability_accuracy": answerability_matches / len(cases),
@@ -396,7 +410,13 @@ def _evaluation_metadata(dataset: Path, variant: str) -> dict[str, object]:
             "oci_rerank_enabled": settings.oci_rerank_enabled,
             "oci_rerank_model": settings.oci_rerank_model,
             "oci_chat_model": settings.oci_chat_model,
-            "qdrant_mode": "embedded_exact" if settings.qdrant_path else "server_hnsw",
+            "qdrant_mode": (
+                "embedded_exact"
+                if settings.qdrant_path
+                else "server_hnsw"
+                if settings.qdrant_hnsw_enabled
+                else "server_exact"
+            ),
             "qdrant_collection": settings.qdrant_collection,
             "bm25_model": settings.bm25_model,
             "parent_max_tokens": settings.parent_max_tokens,
@@ -407,6 +427,128 @@ def _evaluation_metadata(dataset: Path, variant: str) -> dict[str, object]:
             "final_contexts": settings.final_contexts,
         },
     }
+
+
+def _console_text(value: object) -> str:
+    text = " ".join(str(value).split())
+    encoding = sys.stdout.encoding or "utf-8"
+    return text.encode(encoding, errors="backslashreplace").decode(encoding)
+
+
+def _print_field(label: str, value: object, *, width: int = 110) -> None:
+    prefix = f"  {label}: "
+    text = _console_text(value)
+    lines = textwrap.wrap(
+        text,
+        width=width,
+        initial_indent=prefix,
+        subsequent_indent=" " * len(prefix),
+        break_long_words=False,
+        break_on_hyphens=False,
+    )
+    print("\n".join(lines) if lines else prefix.rstrip(), flush=True)
+
+
+def _format_documents(value: object) -> str:
+    if not isinstance(value, list) or not value:
+        return "none"
+    return ", ".join(str(item) for item in value)
+
+
+def _format_score(value: object) -> str:
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        return f"{value:.3f}"
+    return "n/a"
+
+
+def _console_progress(event: str, detail: dict[str, object]) -> None:
+    if event == "retrieval_case":
+        print(
+            f"\n[Retrieval {detail['case']}/{detail['total']}]",
+            flush=True,
+        )
+        _print_field("Question", detail["question"])
+        _print_field(
+            "Expected",
+            "answerable" if detail["expected_answerable"] else "must abstain",
+        )
+        _print_field("Expected documents", _format_documents(detail["expected_document_ids"]))
+        _print_field("Retrieved documents", _format_documents(detail["retrieved_document_ids"]))
+        if detail["expected_answerable"]:
+            _print_field(
+                "Retrieval scores",
+                (
+                    f"recall={_format_score(detail.get('recall'))}, "
+                    f"precision={_format_score(detail.get('precision'))}, "
+                    f"MRR={_format_score(detail.get('reciprocal_rank'))}"
+                ),
+            )
+        else:
+            _print_field("Retrieval result", "PASS" if detail["empty_retrieval"] else "REVIEW")
+        _print_field("Time", f"{detail['duration_ms']} ms")
+        return
+
+    if event == "answer_case":
+        print(f"\n[Answer {detail['case']}/{detail['total']}]", flush=True)
+        _print_field("Question", detail["question"])
+        _print_field("Expected answer", detail.get("expected_output") or "must abstain")
+        _print_field("AI response", detail["actual_output"])
+        _print_field("Answered", detail["answered"])
+        _print_field("Cited documents", _format_documents(detail["cited_document_ids"]))
+        quality = detail.get("quality_scores")
+        if isinstance(quality, dict):
+            _print_field(
+                "Existing quality judge",
+                ", ".join(f"{name}={_format_score(score)}" for name, score in quality.items()),
+            )
+        _print_field("Time", f"{detail['duration_ms']} ms")
+        return
+
+    if event == "deepeval_case_started":
+        print(f"\n[DeepEval {detail['case']}/{detail['total']}]", flush=True)
+        _print_field("Question", detail["question"])
+        _print_field("Expected answer", detail["expected_output"])
+        _print_field("AI response", detail["actual_output"])
+        _print_field("Judge context", f"{detail['context_count']} retrieved parent context(s)")
+        return
+
+    if event == "deepeval_metric_started":
+        _print_field("Judging", str(detail["metric"]).replace("_", " "))
+        return
+
+    if event == "deepeval_metric_completed":
+        metric = str(detail["metric"]).replace("_", " ")
+        _print_field(metric, f"score={_format_score(detail['score'])}")
+        _print_field("Judge reason", detail.get("reason") or "No reason returned")
+        return
+
+    if event == "deepeval_metric_failed":
+        metric = str(detail["metric"]).replace("_", " ")
+        _print_field("Judge failure", f"{metric} FAILED")
+        _print_field("Cause", detail["error"])
+
+
+def _print_summary(report: dict[str, object], output: Path | None) -> None:
+    print("\n" + "=" * 72, flush=True)
+    print("Evaluation summary", flush=True)
+    print("=" * 72, flush=True)
+    gates = report.get("gate_results", {})
+    if isinstance(gates, dict):
+        for name, raw in gates.items():
+            if not isinstance(raw, dict) or not raw.get("enabled"):
+                continue
+            status = "PASS" if raw.get("passed") else "FAIL"
+            print(
+                f"  [{status}] {name}: {_format_score(raw.get('value'))} "
+                f"(minimum {_format_score(raw.get('minimum'))})",
+                flush=True,
+            )
+    print(f"\nOverall: {'PASS' if report.get('passed') else 'FAIL'}", flush=True)
+    failed = report.get("failed_gates", [])
+    if failed:
+        _print_field("Failed gates", _format_documents(failed))
+    if output is not None:
+        _print_field("JSON report", output.resolve())
 
 
 def main() -> int:
@@ -421,6 +563,21 @@ def main() -> int:
         "--variant",
         default=os.getenv("PRODRAG_EVAL_VARIANT", "candidate"),
         help="Variant label recorded in the report (for example baseline or candidate)",
+    )
+    parser.add_argument(
+        "--report-only",
+        action="store_true",
+        help="Write all gate results but return success so a later A/B comparison can decide",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print readable per-question retrieval, answer, and judge progress",
+    )
+    parser.add_argument(
+        "--no-print-report",
+        action="store_true",
+        help="Do not print the complete JSON report to stdout (use with --output)",
     )
     parser.add_argument("--min-recall", type=float, default=0.95)
     parser.add_argument(
@@ -476,7 +633,18 @@ def main() -> int:
 
     retrieval_case_results: list[dict[str, object]] = []
     answer_case_results: list[dict[str, object]] = []
-    metrics: dict[str, object] = evaluate(cases, case_results=retrieval_case_results)
+    progress = _console_progress if args.verbose else None
+    if args.verbose:
+        print("=" * 72, flush=True)
+        print(f"prodRAG local evaluation: {args.variant}", flush=True)
+        print("=" * 72, flush=True)
+        _print_field("Dataset", args.dataset.resolve())
+        _print_field("Questions", len(cases))
+    metrics: dict[str, object] = evaluate(
+        cases,
+        case_results=retrieval_case_results,
+        progress=progress,
+    )
     deepeval_records: list[RAGEvaluationRecord] = []
     if args.end_to_end:
         metrics.update(
@@ -484,11 +652,12 @@ def main() -> int:
                 cases,
                 records=deepeval_records if args.deepeval else None,
                 case_results=answer_case_results,
+                progress=progress,
             )
         )
     if args.deepeval:
         try:
-            from prodrag.clients import get_chat_model
+            from prodrag.clients import get_evaluation_chat_model
             from prodrag.config import get_settings
             from prodrag.deepeval_evaluation import (
                 OCIChatDeepEvalModel,
@@ -501,11 +670,11 @@ def main() -> int:
             )
         settings = get_settings()
         judge = OCIChatDeepEvalModel(
-            get_chat_model(),
+            get_evaluation_chat_model(),
             model_name=settings.oci_chat_model,
             retry_attempts=settings.model_retry_attempts,
         )
-        metrics.update(evaluate_deepeval(deepeval_records, judge))
+        metrics.update(evaluate_deepeval(deepeval_records, judge, progress=progress))
     thresholds = {
         "mean_recall": args.min_recall,
         "mean_precision": args.min_precision,
@@ -546,13 +715,17 @@ def main() -> int:
         "gate_results": gate_results,
         "failed_gates": failed_gates,
         "passed": passed,
+        "report_only": args.report_only,
     }
     serialized = json.dumps(report, indent=2)
-    print(serialized)
+    if not args.no_print_report:
+        print(serialized)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(serialized + "\n", encoding="utf-8")
-    return 0 if passed else 1
+    if args.verbose:
+        _print_summary(report, args.output)
+    return 0 if passed or args.report_only else 1
 
 
 if __name__ == "__main__":

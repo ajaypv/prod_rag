@@ -74,6 +74,12 @@ class Settings(BaseSettings):
     oci_chat_model: str = Field(
         default="openai.gpt-oss-120b", validation_alias="OCI_CHAT_MODEL"
     )
+    oci_eval_max_tokens: int = Field(
+        default=4_000,
+        ge=1_000,
+        le=32_000,
+        validation_alias="RAG_EVAL_MAX_TOKENS",
+    )
 
     qdrant_url: str = Field(default="http://localhost:6333", validation_alias="QDRANT_URL")
     qdrant_path: Path | None = Field(default=None, validation_alias="QDRANT_PATH")

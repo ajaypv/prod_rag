@@ -6,10 +6,12 @@ import json
 import os
 import subprocess
 import sys
+import time
 import tomllib
 from pathlib import Path
 from typing import Any
-
+from urllib.error import URLError
+from urllib.request import urlopen
 
 _THRESHOLD_FLAGS = {
     "mean_recall": "--min-recall",
@@ -126,6 +128,66 @@ def _run(command: list[str], *, cwd: Path, environment: dict[str, str]) -> int:
     return completed.returncode
 
 
+def _run_ingestion(
+    command: list[str],
+    *,
+    cwd: Path,
+    environment: dict[str, str],
+    source: Path,
+    index: int,
+    total: int,
+) -> int:
+    print(f"\n[Ingest {index}/{total}] {source.name}", flush=True)
+    completed = subprocess.run(
+        command,
+        cwd=cwd,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if completed.stderr.strip():
+        print(completed.stderr.rstrip(), file=sys.stderr, flush=True)
+    if completed.returncode != 0:
+        if completed.stdout.strip():
+            print(completed.stdout.rstrip(), flush=True)
+        print("  Status: FAILED", flush=True)
+        return completed.returncode
+
+    payload: dict[str, object] | None = None
+    for line in reversed(completed.stdout.splitlines()):
+        try:
+            candidate = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(candidate, dict):
+            payload = candidate
+            break
+    if payload is None:
+        print("  Status: completed, but no ingestion summary was returned", flush=True)
+    else:
+        print(f"  Document ID: {payload.get('document_id', source.stem)}", flush=True)
+        print(f"  Parent sections: {payload.get('parents_indexed', 'n/a')}", flush=True)
+        print(f"  Search chunks: {payload.get('chunks_indexed', 'n/a')}", flush=True)
+        print("  Status: READY", flush=True)
+    return 0
+
+
+def _wait_for_qdrant(base_url: str, timeout_seconds: float = 60) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    readiness_url = f"{base_url.rstrip('/')}/readyz"
+    while time.monotonic() < deadline:
+        try:
+            with urlopen(readiness_url, timeout=3) as response:
+                if 200 <= response.status < 300:
+                    return
+        except (OSError, URLError):
+            time.sleep(1)
+    raise TimeoutError(f"Qdrant did not become ready within {timeout_seconds}s: {readiness_url}")
+
+
 def main() -> int:
     project_root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(
@@ -151,14 +213,28 @@ def main() -> int:
     parser.add_argument("--data-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--qdrant-url")
+    parser.add_argument(
+        "--reuse-data-dir",
+        action="store_true",
+        help=(
+            "Skip corpus ingestion and reuse an existing non-empty local data directory; "
+            "intended only to resume a failed local evaluation"
+        ),
+    )
     args = parser.parse_args()
 
     dataset = args.dataset.resolve(strict=True)
     manifest_path = args.manifest.resolve(strict=True)
     policy_path = args.policy.resolve(strict=True)
     data_dir = args.data_dir.resolve()
-    if data_dir.exists() and any(data_dir.iterdir()):
-        raise RuntimeError(f"CI data directory must be empty: {data_dir}")
+    has_existing_data = data_dir.exists() and any(data_dir.iterdir())
+    if has_existing_data and not args.reuse_data_dir:
+        raise RuntimeError(
+            f"CI data directory must be empty: {data_dir}. Use a new --data-dir, "
+            "or add --reuse-data-dir to resume evaluation with this existing local index."
+        )
+    if args.reuse_data_dir and not has_existing_data:
+        parser.error("--reuse-data-dir requires an existing non-empty --data-dir")
     data_dir.mkdir(parents=True, exist_ok=True)
 
     manifest, files = _load_manifest(manifest_path, project_root)
@@ -170,27 +246,58 @@ def main() -> int:
         git_sha=args.git_sha,
         qdrant_url=args.qdrant_url,
     )
+    if args.qdrant_url:
+        _wait_for_qdrant(args.qdrant_url)
+
+    print("=" * 72, flush=True)
+    print(f"Preparing prodRAG evaluation variant: {args.variant}", flush=True)
+    print("=" * 72, flush=True)
+    print(f"Dataset: {dataset}", flush=True)
+    print(f"Corpus manifest: {manifest_path}", flush=True)
+    print(f"Corpus files: {len(files)}", flush=True)
+    print(f"Data directory: {data_dir}", flush=True)
+    print(f"Qdrant: {args.qdrant_url or data_dir / 'qdrant'}", flush=True)
+    print(
+        f"Index mode: {'REUSE EXISTING (ingestion skipped)' if args.reuse_data_dir else 'REBUILD'}",
+        flush=True,
+    )
 
     tenant = str(manifest.get("tenant_id", "default"))
     product = manifest.get("product")
     version = manifest.get("version")
-    for source in files:
-        command = [
-            sys.executable,
-            "-m",
-            "prodrag.cli",
-            "ingest",
-            str(source),
-            "--tenant",
-            tenant,
-        ]
-        if product:
-            command.extend(("--product", str(product)))
-        if version:
-            command.extend(("--version", str(version)))
-        if _run(command, cwd=project_root, environment=environment) != 0:
-            return 2
+    if args.reuse_data_dir:
+        print("\nExisting index selected; skipping all corpus ingestion steps.", flush=True)
+    else:
+        for index, source in enumerate(files, start=1):
+            command = [
+                sys.executable,
+                "-m",
+                "prodrag.cli",
+                "ingest",
+                str(source),
+                "--tenant",
+                tenant,
+            ]
+            if product:
+                command.extend(("--product", str(product)))
+            if version:
+                command.extend(("--version", str(version)))
+            if (
+                _run_ingestion(
+                    command,
+                    cwd=project_root,
+                    environment=environment,
+                    source=source,
+                    index=index,
+                    total=len(files),
+                )
+                != 0
+            ):
+                return 2
 
+    print("\n" + "=" * 72, flush=True)
+    print("Corpus ready. Starting retrieval, answer, and DeepEval checks.", flush=True)
+    print("=" * 72, flush=True)
     command = [
         sys.executable,
         "-m",
@@ -202,6 +309,9 @@ def main() -> int:
         args.variant,
         "--output",
         str(args.output.resolve()),
+        "--report-only",
+        "--verbose",
+        "--no-print-report",
     ]
     for metric, threshold in thresholds.items():
         command.extend((_THRESHOLD_FLAGS[metric], str(threshold)))

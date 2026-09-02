@@ -73,7 +73,8 @@ class OCIChatDeepEvalModel(DeepEvalBaseLLM):
             except Exception as exc:  # DeepEval should receive a final, contextual failure.
                 last_error = exc
         raise RuntimeError(
-            f"OCI DeepEval judge failed after {self.retry_attempts} attempts"
+            f"OCI DeepEval judge failed after {self.retry_attempts} attempts: "
+            f"{_exception_summary(last_error)}"
         ) from last_error
 
     def _run_with_retries(self, operation: Callable[[], str | BaseModel]) -> str | BaseModel:
@@ -84,13 +85,16 @@ class OCIChatDeepEvalModel(DeepEvalBaseLLM):
             except Exception as exc:  # Model and schema failures are both retryable offline.
                 last_error = exc
         raise RuntimeError(
-            f"OCI DeepEval judge failed after {self.retry_attempts} attempts"
+            f"OCI DeepEval judge failed after {self.retry_attempts} attempts: "
+            f"{_exception_summary(last_error)}"
         ) from last_error
 
 
 def evaluate_deepeval(
     records: list[RAGEvaluationRecord],
     judge: DeepEvalBaseLLM,
+    *,
+    progress: Callable[[str, dict[str, object]], None] | None = None,
 ) -> dict[str, object]:
     """Score completed RAG executions with four complementary DeepEval metrics.
 
@@ -109,6 +113,18 @@ def evaluate_deepeval(
     case_results: list[dict[str, object]] = []
 
     for index, record in enumerate(records, start=1):
+        if progress is not None:
+            progress(
+                "deepeval_case_started",
+                {
+                    "case": index,
+                    "total": len(records),
+                    "question": record.question,
+                    "expected_output": record.expected_output,
+                    "actual_output": record.actual_output,
+                    "context_count": len(record.retrieval_context),
+                },
+            )
         if not record.answered or not record.retrieval_context:
             detail = (
                 "The pipeline abstained on an answerable golden question."
@@ -117,6 +133,18 @@ def evaluate_deepeval(
             )
             scores = dict.fromkeys(score_groups, 0.0)
             reasons = dict.fromkeys(score_groups, detail)
+            if progress is not None:
+                for name, score in scores.items():
+                    progress(
+                        "deepeval_metric_completed",
+                        {
+                            "case": index,
+                            "total": len(records),
+                            "metric": name,
+                            "score": score,
+                            "reason": detail,
+                        },
+                    )
         else:
             test_case = LLMTestCase(
                 input=record.question,
@@ -127,15 +155,45 @@ def evaluate_deepeval(
             scores: dict[str, float] = {}
             reasons: dict[str, str | None] = {}
             for name, metric in _build_metrics(judge):
+                if progress is not None:
+                    progress(
+                        "deepeval_metric_started",
+                        {
+                            "case": index,
+                            "total": len(records),
+                            "metric": name,
+                        },
+                    )
                 try:
                     metric.measure(test_case)
                 except Exception as exc:
+                    detail = {
+                        "case": index,
+                        "total": len(records),
+                        "metric": name,
+                        "question": record.question,
+                        "error": _exception_summary(exc),
+                    }
+                    if progress is not None:
+                        progress("deepeval_metric_failed", detail)
                     raise RuntimeError(
-                        f"DeepEval metric {name!r} failed for golden case {index}"
+                        f"DeepEval metric {name!r} failed for golden case {index} "
+                        f"({record.question!r}): {_exception_summary(exc)}"
                     ) from exc
                 score = float(metric.score or 0.0)
                 scores[name] = score
                 reasons[name] = metric.reason
+                if progress is not None:
+                    progress(
+                        "deepeval_metric_completed",
+                        {
+                            "case": index,
+                            "total": len(records),
+                            "metric": name,
+                            "score": score,
+                            "reason": metric.reason,
+                        },
+                    )
 
         for name, score in scores.items():
             score_groups[name].append(score)
@@ -189,7 +247,14 @@ def _parse_response(message: object, schema: type[BaseModel] | None) -> str | Ba
     text = _message_text(message)
     if schema is None:
         return text
-    return schema.model_validate_json(_extract_json_object(text))
+    try:
+        return schema.model_validate_json(_extract_json_object(text))
+    except Exception as exc:
+        raise ValueError(
+            f"response did not match {schema.__name__}; "
+            f"response_length={len(text)}; response_preview={_response_preview(text)!r}; "
+            f"validation_error={_exception_summary(exc, limit=350)}"
+        ) from exc
 
 
 def _message_text(message: object) -> str:
@@ -214,6 +279,20 @@ def _extract_json_object(text: str) -> str:
     if start == -1 or end < start:
         raise ValueError("OCI judge did not return a JSON object")
     return text[start : end + 1]
+
+
+def _response_preview(text: str, *, limit: int = 240) -> str:
+    compact = " ".join(text.split())
+    return compact if len(compact) <= limit else compact[:limit] + "..."
+
+
+def _exception_summary(exc: BaseException | None, *, limit: int = 700) -> str:
+    if exc is None:
+        return "unknown error"
+    message = " ".join(str(exc).split()) or "no error message"
+    if len(message) > limit:
+        message = message[:limit] + "..."
+    return f"{type(exc).__name__}: {message}"
 
 
 def _mean(values: list[float]) -> float | None:
