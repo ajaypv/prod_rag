@@ -60,12 +60,14 @@ def get_embeddings() -> Embeddings:
     return OCIQueryDocumentEmbeddings(document_embeddings, query_embeddings)
 
 
-@lru_cache(maxsize=1)
-def get_chat_model() -> BaseChatModel:
+def _create_chat_model(*, max_tokens: int) -> BaseChatModel:
     from langchain_oci import ChatOCIGenAI
 
     settings = get_settings()
-    model_kwargs: dict[str, int | float] = {"temperature": 0.0, "max_tokens": 900}
+    model_kwargs: dict[str, int | float] = {
+        "temperature": 0.0,
+        "max_tokens": max_tokens,
+    }
     return ChatOCIGenAI(
         model_id=settings.oci_chat_model,
         service_endpoint=settings.effective_oci_service_endpoint,
@@ -75,6 +77,18 @@ def get_chat_model() -> BaseChatModel:
         auth_file_location=settings.expanded_oci_config_file,
         model_kwargs=model_kwargs,
     )
+
+
+@lru_cache(maxsize=1)
+def get_chat_model() -> BaseChatModel:
+    return _create_chat_model(max_tokens=900)
+
+
+@lru_cache(maxsize=1)
+def get_evaluation_chat_model() -> BaseChatModel:
+    """Create the judge model with room for DeepEval's structured JSON arrays."""
+
+    return _create_chat_model(max_tokens=get_settings().oci_eval_max_tokens)
 
 
 def get_native_oci_client():

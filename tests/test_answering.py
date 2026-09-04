@@ -212,4 +212,33 @@ def test_prepared_evidence_matches_shared_context_budget() -> None:
 
     evidence = service.prepare_evidence(candidates)
 
-    assert [len(item.document.page_content) for item in evidence] == [3_000, 1_000]
+    # The second context is one indivisible block, so it is skipped instead of being
+    # truncated in the middle of its content.
+    assert [len(item.document.page_content) for item in evidence] == [3_000]
+
+
+def test_prepared_evidence_packs_complete_paragraphs_with_token_budget() -> None:
+    settings = Settings(
+        _env_file=None,
+        context_char_budget=10_000,
+        context_token_budget=1_000,
+    )
+    service = GroundedAnswerService(
+        settings,
+        FakeListChatModel(responses=[]),
+        ScoreThresholdConfidenceGrader(settings),
+    )
+    first = " ".join(f"first{index}" for index in range(800))
+    second_part = " ".join(f"second{index}" for index in range(150))
+    third_part = " ".join(f"third{index}" for index in range(150))
+    candidates = [
+        RetrievedCandidate(Document(page_content=first), hybrid_score=0.9),
+        RetrievedCandidate(
+            Document(page_content=f"{second_part}\n\n{third_part}"),
+            hybrid_score=0.8,
+        ),
+    ]
+
+    evidence = service.prepare_evidence(candidates)
+
+    assert [item.document.page_content for item in evidence] == [first, second_part]

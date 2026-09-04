@@ -12,7 +12,6 @@ export default defineConfig({
       output: {
         manualChunks: {
           icons: ["lucide-react"],
-          animation: ["motion"],
           flow: ["@xyflow/react"],
         },
       },

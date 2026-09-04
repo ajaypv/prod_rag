@@ -1,7 +1,12 @@
 from langchain_core.documents import Document
 
 from prodrag.domain import RetrievedCandidate
-from prodrag.evaluation import EvaluationCase, evaluate, evaluate_answers
+from prodrag.evaluation import (
+    EvaluationCase,
+    RAGEvaluationRecord,
+    evaluate,
+    evaluate_answers,
+)
 from prodrag.models import (
     Citation,
     ConfidenceLevel,
@@ -35,13 +40,15 @@ class FakeRetrievalService:
 
 def test_evaluate_reports_macro_document_precision(monkeypatch) -> None:
     monkeypatch.setattr("prodrag.evaluation.get_retrieval_service", FakeRetrievalService)
+    events: list[tuple[str, dict[str, object]]] = []
 
     metrics = evaluate(
         [
             EvaluationCase(question="one", expected_document_ids=["a"]),
             EvaluationCase(question="two", expected_document_ids=["b", "missing"]),
             EvaluationCase(question="none", expected_answerable=False),
-        ]
+        ],
+        progress=lambda event, detail: events.append((event, detail)),
     )
 
     assert metrics["mean_recall"] == 0.75
@@ -49,6 +56,9 @@ def test_evaluate_reports_macro_document_precision(monkeypatch) -> None:
     assert metrics["hit_rate"] == 1.0
     assert metrics["empty_retrieval_rate"] == 1.0
     assert metrics["retrieval_p95_ms"] >= 0
+    assert len(events) == 3
+    assert events[0][0] == "retrieval_case"
+    assert events[0][1]["question"] == "one"
 
 
 def test_evaluate_reports_passage_precision_and_recall(monkeypatch) -> None:
@@ -126,6 +136,8 @@ class FakeQualityJudge:
 
 def test_evaluate_answers_measures_real_abstention_and_citations(monkeypatch) -> None:
     monkeypatch.setattr("prodrag.evaluation.get_query_service", FakeQueryService)
+    records: list[RAGEvaluationRecord] = []
+    events: list[tuple[str, dict[str, object]]] = []
 
     metrics = evaluate_answers(
         [
@@ -138,6 +150,8 @@ def test_evaluate_answers_measures_real_abstention_and_citations(monkeypatch) ->
             EvaluationCase(question="none", expected_answerable=False),
         ],
         quality_judge=FakeQualityJudge(),
+        records=records,
+        progress=lambda event, detail: events.append((event, detail)),
     )
 
     assert metrics["answerability_accuracy"] == 1.0
@@ -150,3 +164,16 @@ def test_evaluate_answers_measures_real_abstention_and_citations(monkeypatch) ->
     assert metrics["faithfulness"] == 1.0
     assert metrics["citation_correctness"] == 1.0
     assert metrics["end_to_end_p95_ms"] >= 0
+    assert records == [
+        RAGEvaluationRecord(
+            question="one",
+            expected_output="Grounded answer.",
+            actual_output="Grounded answer [S1]",
+            retrieval_context=("Grounded answer.",),
+            answered=True,
+        )
+    ]
+    assert len(events) == 3
+    assert events[0][0] == "answer_case"
+    assert events[0][1]["expected_output"] == "Grounded answer."
+    assert events[0][1]["actual_output"] == "Grounded answer [S1]"

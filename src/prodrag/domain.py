@@ -21,6 +21,10 @@ class ParentSection:
     heading: str
     text: str
     order: int
+    part: int = 1
+    part_count: int = 1
+    previous_parent_id: str | None = None
+    next_parent_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

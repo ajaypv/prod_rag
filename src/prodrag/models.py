@@ -15,6 +15,22 @@ class JobState(StrEnum):
     FAILED = "failed"
 
 
+class FlowStatus(StrEnum):
+    RUNNING = "running"
+    COMPLETED = "completed"
+    SKIPPED = "skipped"
+    FAILED = "failed"
+
+
+class EvaluationStage(StrEnum):
+    QUEUED = "queued"
+    LOAD_DATASET = "load_dataset"
+    RETRIEVAL = "retrieval"
+    ANSWER_QUALITY = "answer_quality"
+    DEEPEVAL = "deepeval"
+    REPORT = "report"
+
+
 class TicketCategory(StrEnum):
     BILLING = "billing"
     API_LIMITS = "api_limits"
@@ -97,13 +113,42 @@ class IngestionResult(BaseModel):
     chunks_indexed: int
 
 
+class FlowEvent(BaseModel):
+    operation_id: str
+    stage: str
+    status: FlowStatus
+    message: str
+    duration_ms: float | None = None
+    data: dict[str, Any] = Field(default_factory=dict)
+    recorded_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 class JobStatus(BaseModel):
     job_id: str
     state: JobState
     document_id: str
     tenant_id: str = "default"
+    stage: str = "queued"
     message: str | None = None
     result: IngestionResult | None = None
+    events: list[FlowEvent] = Field(default_factory=list)
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class EvaluationAccepted(BaseModel):
+    job_id: str
+    state: JobState = JobState.QUEUED
+
+
+class EvaluationJobStatus(BaseModel):
+    job_id: str
+    state: JobState
+    tenant_id: str = "default"
+    stage: EvaluationStage = EvaluationStage.QUEUED
+    deep_eval: bool = False
+    message: str | None = None
+    metrics: dict[str, Any] | None = None
+    events: list[FlowEvent] = Field(default_factory=list)
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 

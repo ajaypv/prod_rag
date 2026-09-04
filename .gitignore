@@ -8,6 +8,11 @@ frontend/*.tsbuildinfo
 .ruff_cache/
 .uv-cache/
 .venv/
+.deepeval/
+.ci-artifacts/
+.ci-data/
+.pnpm-store/
+artifacts/
 __pycache__/
 *.py[cod]
 data/

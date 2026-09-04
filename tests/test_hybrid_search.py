@@ -32,7 +32,9 @@ def test_blank_qdrant_path_selects_server_mode() -> None:
 
 def test_qdrant_hybrid_search_explicitly_uses_rrf_fusion() -> None:
     store = RecordingStore()
-    index = InspectableQdrantIndex(Settings(_env_file=None), store)
+    index = InspectableQdrantIndex(
+        Settings(_env_file=None, qdrant_hnsw_enabled=False), store
+    )
 
     results = index.hybrid_search(
         "HTTP 429",
@@ -52,7 +54,11 @@ def test_qdrant_hybrid_search_explicitly_uses_rrf_fusion() -> None:
 
 def test_qdrant_embedded_mode_omits_unsupported_search_params() -> None:
     store = RecordingStore()
-    settings = Settings(_env_file=None, qdrant_path="./data/qdrant")
+    settings = Settings(
+        _env_file=None,
+        qdrant_path="./data/qdrant",
+        qdrant_hnsw_enabled=False,
+    )
     index = InspectableQdrantIndex(settings, store)
 
     index.hybrid_search(

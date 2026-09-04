@@ -131,9 +131,10 @@ class QdrantIndex:
                 ),
             ],
             must_not=[
-                models.FieldCondition(
-                    key="metadata.checksum", match=models.MatchValue(value=checksum)
-                )
+                # Point IDs represent the exact current child set. Filtering by IDs instead
+                # of only by checksum also removes obsolete chunks when a splitter upgrade
+                # changes boundaries for an otherwise unchanged source file.
+                models.HasIdCondition(has_id=list(ids))
             ],
         )
         self.client.delete(

@@ -9,6 +9,7 @@ from prodrag.ingestion import IngestionService
 from prodrag.ingestion.chunking import SemanticChunkingStrategy
 from prodrag.ingestion.parsing import DoclingParser, MarkdownSectioner
 from prodrag.jobs import RedisJobStore
+from prodrag.parent_store import SQLiteParentStore
 from prodrag.quality import RAGQualityJudge
 from prodrag.querying import QueryService
 from prodrag.retrieval import RetrievalService
@@ -25,6 +26,12 @@ def get_index() -> QdrantIndex:
 
 
 @lru_cache(maxsize=1)
+def get_parent_store() -> SQLiteParentStore:
+    """Return the process-wide handle for durable local parent sections."""
+    return SQLiteParentStore(get_settings().parent_store_path)
+
+
+@lru_cache(maxsize=1)
 def get_ingestion_service() -> IngestionService:
     settings = get_settings()
     return IngestionService(
@@ -35,13 +42,17 @@ def get_ingestion_service() -> IngestionService:
             pdf_table_structure_enabled=settings.pdf_table_structure_enabled,
             pdf_force_backend_text=settings.pdf_force_backend_text,
         ),
-        sectioner=MarkdownSectioner(settings.parent_max_chars),
+        sectioner=MarkdownSectioner(
+            settings.parent_max_chars,
+            settings.parent_max_tokens,
+        ),
         chunker=SemanticChunkingStrategy(
             get_embeddings(),
             dimension=settings.oci_embed_dimension,
             chunk_size=settings.chunk_size_tokens,
             threshold=settings.semantic_threshold,
         ),
+        parent_store=get_parent_store(),
         index=get_index(),
     )
 
@@ -62,7 +73,12 @@ def get_retrieval_service() -> RetrievalService:
         settings,
         get_index(),
         reranker,
-        ParentContextAssembler(limit=settings.final_contexts),
+        ParentContextAssembler(
+            get_parent_store(),
+            limit=settings.final_contexts,
+            neighbor_count=settings.parent_neighbor_count,
+            expanded_max_tokens=settings.expanded_parent_max_tokens,
+        ),
     )
 
 

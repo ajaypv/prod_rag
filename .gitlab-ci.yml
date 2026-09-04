@@ -1,0 +1,147 @@
+stages:
+  - validate
+  - evaluate
+  - compare
+
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+default:
+  interruptible: true
+
+variables:
+  UV_CACHE_DIR: "$CI_PROJECT_DIR/.uv-cache"
+  DEEPEVAL_TELEMETRY_OPT_OUT: "1"
+  DEEPEVAL_DISABLE_DOTENV: "1"
+  DEEPEVAL_DISABLE_LEGACY_KEYFILE: "1"
+  DEEPEVAL_NO_INSPECT_PROMPT: "1"
+
+python-quality:
+  stage: validate
+  image: ghcr.io/astral-sh/uv:0.8.15-python3.13-bookworm-slim
+  cache:
+    key:
+      files:
+        - uv.lock
+    paths:
+      - .uv-cache/
+  script:
+    - uv sync --frozen --group dev
+    - uv lock --check
+    - uv run ruff check .
+    - uv run pytest --junitxml=.ci-artifacts/python-tests.xml
+  artifacts:
+    when: always
+    expire_in: 14 days
+    paths:
+      - .ci-artifacts/python-tests.xml
+    reports:
+      junit: .ci-artifacts/python-tests.xml
+
+frontend-build:
+  stage: validate
+  image: node:22.19.0-bookworm-slim
+  cache:
+    key:
+      files:
+        - frontend/pnpm-lock.yaml
+    paths:
+      - .pnpm-store/
+  before_script:
+    - corepack enable
+    - corepack prepare pnpm@11.19.0 --activate
+    - pnpm config set store-dir "$CI_PROJECT_DIR/.pnpm-store"
+  script:
+    - cd frontend
+    - pnpm install --frozen-lockfile
+    - pnpm run build
+
+.rag-evaluation:
+  stage: evaluate
+  image: ghcr.io/astral-sh/uv:0.8.15-python3.13-bookworm-slim
+  services:
+    - name: qdrant/qdrant:v1.18.0
+      alias: qdrant
+  cache:
+    key:
+      files:
+        - uv.lock
+    paths:
+      - .uv-cache/
+  before_script:
+    - uv sync --frozen --group dev
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - artifacts/
+
+rag-reference:
+  extends: .rag-evaluation
+  script:
+    - >-
+      uv run python scripts/run_ci_evaluation.py
+      --variant baseline
+      --git-sha "$CI_COMMIT_SHA"
+      --data-dir "$CI_PROJECT_DIR/.ci-data/reference-$CI_JOB_ID"
+      --output "$CI_PROJECT_DIR/artifacts/reference.json"
+      --qdrant-url "http://qdrant:6333"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+rag-candidate:
+  extends: .rag-evaluation
+  script:
+    - >-
+      uv run python scripts/run_ci_evaluation.py
+      --variant candidate
+      --git-sha "$CI_COMMIT_SHA"
+      --data-dir "$CI_PROJECT_DIR/.ci-data/candidate-$CI_JOB_ID"
+      --output "$CI_PROJECT_DIR/artifacts/candidate.json"
+      --qdrant-url "http://qdrant:6333"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
+rag-fetch-baseline:
+  stage: evaluate
+  image: ghcr.io/astral-sh/uv:0.8.15-python3.13-bookworm-slim
+  script:
+    - python scripts/fetch_gitlab_baseline.py --output artifacts/baseline.json
+  artifacts:
+    expire_in: 30 days
+    paths:
+      - artifacts/baseline.json
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
+rag-ab-gate:
+  stage: compare
+  image: ghcr.io/astral-sh/uv:0.8.15-python3.13-bookworm-slim
+  needs:
+    - job: rag-candidate
+      artifacts: true
+    - job: rag-fetch-baseline
+      artifacts: true
+  script:
+    - uv sync --frozen --group dev
+    - >-
+      uv run prodrag-compare
+      --baseline artifacts/baseline.json
+      --candidate artifacts/candidate.json
+      --policy eval/gates.toml
+      --output artifacts/comparison.json
+      --junit-output artifacts/comparison.xml
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - artifacts/baseline.json
+      - artifacts/candidate.json
+      - artifacts/comparison.json
+      - artifacts/comparison.xml
+    reports:
+      junit: artifacts/comparison.xml
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'

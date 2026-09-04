@@ -58,3 +58,5 @@ def test_revision_is_published_only_after_all_documents_upload() -> None:
     assert [event[0] for event in index.events] == ["upload", "ready", "delete"]
     assert index.events[1][1]["key"] == "metadata"
     assert index.events[1][1]["payload"] == {"revision_ready": True}
+    stale_filter = index.events[2][1]["points_selector"].filter
+    assert stale_filter.must_not[0].has_id == ["point-1"]

@@ -1,7 +1,8 @@
 # prodRAG
 
 Lightweight production RAG for roughly 10–30 technical documents or FAQ files. Document
-contents are parsed locally and stored in a local Qdrant server. OCI Generative AI is used
+contents are parsed locally; full parent sections are stored in SQLite and searchable child
+chunks are stored in local Qdrant. OCI Generative AI is used
 for safety triage, embedding, reranking, and grounded answer generation through LangChain.
 
 ## Live learning application
@@ -30,7 +31,8 @@ blockers.
 flowchart LR
     U["Upload API"] --> R["Redis / Dramatiq queue"]
     R --> D["Local parser: native PDF text or Docling"]
-    D --> S["Heading-aware parent sections"]
+    D --> S["Token-aware linked parent parts"]
+    S --> PS["Local SQLite: full parent text"]
     S --> C["Chonkie semantic child chunks"]
     C --> E["OCI Embed 4 via LangChain"]
     E --> Q["Local Qdrant: dense + BM25 RRF"]
@@ -38,26 +40,29 @@ flowchart LR
     T -->|"safe with medium or high confidence"| Q
     T -->|"sensitive, low-confidence, or invalid"| H["Customer-support review"]
     Q --> RR["OCI Rerank 4"]
-    RR --> P["Expand top children to parent sections"]
+    RR --> P["Resolve matched + adjacent parent parts"]
+    PS --> P
     P --> L["OCI chat model via LangChain"]
     L --> A["Grounded answer + source citations"]
 ```
 
-The ingestion worker writes a new checksum-based revision before deleting stale vectors.
-If parsing or embedding fails, the previous good revision stays searchable. Point IDs are
-deterministic, making retries idempotent.
+The ingestion worker stores parents before publishing their children, then prunes old parents only
+after Qdrant accepts the new checksum-based revision. If parsing, embedding, or indexing fails, the
+previous good revision stays searchable. Point IDs and parent IDs are deterministic, making retries
+idempotent.
 
 ## Code layout
 
 Each module has one main responsibility:
 
-- `ingestion/parsing.py` extracts Markdown and structure-aware parent sections.
+- `ingestion/parsing.py` extracts Markdown and creates token/character-bounded, linked parent parts.
 - `ingestion/chunking.py` creates semantic child chunks inside each parent.
 - `ingestion/service.py` builds deterministic metadata and upserts document revisions.
+- `parent_store.py` persists full parent text and revision metadata in local SQLite.
 - `retrieval/hybrid_search.py` defines the dense-and-sparse search contract.
 - `retrieval/sparse.py` configures local FastEmbed `Qdrant/bm25` sparse embeddings.
 - `retrieval/reranking.py` contains the OCI reranker adapter.
-- `retrieval/context.py` deduplicates children and expands winning parent sections.
+- `retrieval/context.py` deduplicates child hits and resolves the matched parent plus bounded neighbors from SQLite.
 - `retrieval/confidence.py` grades retrieval confidence independently from the LLM.
 - `retrieval/service.py` orchestrates search, reranking, filtering, and context assembly.
 - `vector_store.py` owns Qdrant collection, HNSW/exact settings, upserts, and RRF fusion.
@@ -68,7 +73,10 @@ Each module has one main responsibility:
 - [Docling](https://docling-project.github.io/docling/) parses PDF, DOCX, PPTX, HTML,
   Markdown, and text locally while retaining document structure.
 - [Chonkie SemanticChunker](https://docs.chonkie.ai/oss/chunkers/semantic-chunker) creates
-  bounded semantic chunks with a custom OCI embedding adapter.
+  topic-aware child chunks with a custom OCI embedding adapter.
+- [LangChain Text Splitters](https://reference.langchain.com/python/langchain-text-splitters)
+  provides deterministic recursive size guards and language-aware separators for oversized code.
+  The dependency is pinned exactly so splitter behavior changes only through an intentional upgrade.
 - [LangChain OCI](https://docs.langchain.com/oss/python/integrations/providers/oci) provides
   reusable OCI chat and embedding clients. They are singletons in this service.
 - [Qdrant + LangChain](https://qdrant.tech/documentation/frameworks/langchain/) provides
@@ -76,6 +84,8 @@ Each module has one main responsibility:
   locally using the packaged English stopword asset, without a runtime model download.
 - [Dramatiq](https://dramatiq.io/guide.html) gives the ingestion path durable Redis queues,
   automatic retries, exponential backoff, and a dead-letter queue.
+- Python's built-in SQLite driver provides durable local parent storage with WAL-mode reads while
+  the ingestion worker writes. The `ParentStore` protocol keeps a future PostgreSQL adapter possible.
 
 ## Exact search versus HNSW
 
@@ -114,8 +124,9 @@ controls needed to reach and verify that target on your data:
 1. Structure-aware parsing and heading parents prevent unrelated sections from being mixed.
 2. Semantic children improve recall for natural-language questions.
 3. Hybrid dense + BM25 retrieval covers both intent and exact technical terms/error codes.
-4. The default OCI Rerank 4 configuration reorders the best 10 of 20 retrieved candidates
-   before answer generation, then retains up to 5 parent contexts.
+4. The default OCI Rerank 4 configuration reorders the best 10 of 20 retrieved candidates.
+   Each winning child resolves its matched parent part and, when the expansion budget permits,
+   one adjacent part before retaining up to 5 contexts.
 5. When reranking is enabled, low rerank scores cause an abstention instead of an unsupported
    answer.
 6. `prodrag-eval` reports document-level recall and precision, and fails CI when configured
@@ -208,6 +219,22 @@ uv run dramatiq prodrag.worker --processes 1 --threads 2
 The import paths in those two commands are lowercase: `prodrag.api:app` and
 `prodrag.worker`. On a case-sensitive host, use the lowercase spelling exactly.
 
+Start the live React Flow console in a third terminal. Use `uv sync --group dev` before starting
+the worker when the UI's optional DeepEval mode is required.
+
+```powershell
+Set-Location .\frontend
+pnpm install --frozen-lockfile
+pnpm dev
+```
+
+Open `http://127.0.0.1:4173`. The console connects to `http://127.0.0.1:8000` by default and shows
+real ingestion history, streamed query stages, retrieved evidence, and background evaluation
+results. Configure browser origins with `RAG_CORS_ORIGINS`; set `VITE_API_BASE_URL` when building
+the frontend against a deployed backend. The GitHub Pages workflow reads `VITE_API_BASE_URL` from
+a repository Actions variable, so set it to the public HTTPS URL of the running prodRAG API before
+deploying the frontend.
+
 For an initial 10–30 document bootstrap, synchronous CLI ingestion is simpler:
 
 ```powershell
@@ -216,6 +243,75 @@ uv run prodrag query "How do I rotate the API token?" --product router --version
 ```
 
 The command name is lowercase `prodrag` on case-sensitive hosts.
+
+### Inspect parent and child chunks without indexing
+
+Use the read-only inspector to understand exactly how one Markdown file is split. Parent-only mode
+uses the production heading splitter and needs no OCI call or running service:
+
+```powershell
+uv run python .\scripts\inspect_chunks.py .\samples\b2b-saas\api-authentication.md --parents-only
+```
+
+Remove `--parents-only` to run the production semantic child splitter. That mode calls the
+configured embedding model because the child boundaries depend on embedding similarity, but it
+still writes nothing to SQLite, Qdrant, or Redis:
+
+```powershell
+uv run python .\scripts\inspect_chunks.py .\samples\b2b-saas\api-authentication.md
+```
+
+Both commands print parent IDs, headings, character and estimated-token counts, and the full text.
+Add `--preview-chars 500` when inspecting a large file to shorten each printed block.
+
+Parent parts have two hard limits: `RAG_PARENT_MAX_CHARS=8000` and the shared conservative
+`RAG_PARENT_MAX_TOKENS=2000` estimate. Every part repeats its complete H1-to-H6 hierarchy and stores
+`parent_part`, `parent_part_count`, `previous_parent_id`, and `next_parent_id`. Paragraphs, loose
+lists, Markdown tables, and fenced code remain atomic while they fit. If one structural element is
+itself over budget, tables split only between rows and repeat their header, while code repeats its
+fence and prefers complete lines; only an individually oversized line falls back to words or
+characters.
+
+Markdown tables are handled before generic semantic splitting. A table that fits within the child
+token target remains intact. Larger tables split only between complete rows, with the column header
+and separator repeated in every child. A single oversized row is converted to labeled fields before
+the strict size guard runs. Table-looking text inside fenced code blocks is ignored by the table
+detector.
+
+Fenced code blocks also bypass generic semantic splitting. Blocks under the child target remain
+intact. Oversized blocks repeat their original language fence and use LangChain's language-aware
+class/function separators when the declared language is supported. Unknown languages fall back to
+blank-line and complete-line boundaries. Only a single line that is itself larger than the model
+budget may fall back to word or character splitting.
+
+The current semantic and recursive child splitters use zero overlap. Parent expansion already
+restores the surrounding section after retrieval, while structural repetition supplies table
+context without duplicating unrelated rows. Introduce prose overlap only after evaluation shows
+boundary-related misses, then measure both recall and duplicate-result pressure on precision.
+
+### Local parent and child storage
+
+`RAG_PARENT_STORE_PATH=./data/parents.sqlite3` stores complete parent sections in a local SQLite
+database. Qdrant stores each smaller child text, dense and BM25 vectors, searchable metadata, and
+the `parent_id` reference—not a duplicate copy of the full parent. After retrieval and reranking,
+`retrieval/context.py` looks up the winning parent with the composite key
+`(tenant_id, document_id, parent_id)`. It may add one complete previous and/or next linked part,
+provided the combined context stays within `RAG_EXPANDED_PARENT_MAX_TOKENS=3000`.
+
+Answer evidence is then packed in rank order under both `RAG_CONTEXT_TOKEN_BUDGET=7500` and
+`RAG_CONTEXT_CHAR_BUDGET=30000`. The final candidate is cut only at a complete Markdown block
+boundary, so answer generation no longer receives a paragraph, list, table, or fenced code block
+truncated in the middle. A block that cannot fit is skipped rather than sliced.
+
+This SQLite implementation supports the current single-host local deployment, including separate
+API and worker processes on that host. Back up `parents.sqlite3` together with Qdrant. A multi-host
+or horizontally replicated production deployment needs a shared `ParentStore` implementation such
+as PostgreSQL; do not place SQLite on an arbitrary network filesystem. Reingest documents created
+by older versions to populate SQLite. A temporary read fallback supports legacy Qdrant points that
+still contain `parent_text`, but newly ingested children do not duplicate it.
+
+Reingest existing documents after deploying this change. Older Qdrant points do not contain the
+new part/link metadata, and older SQLite parents are not divided using the token-aware strategy.
 
 ## Prompt engineering and safety controls
 
@@ -289,10 +385,13 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8000/v1/query -Headers $hea
 Endpoints:
 
 - `POST /v1/documents` — authenticated asynchronous ingestion
-- `GET /v1/ingestions/{job_id}` — ingestion status
+- `GET /v1/ingestions/{job_id}` — ingestion status and persisted stage history
+- `POST /v1/evaluations` — authenticated asynchronous golden-dataset evaluation
+- `GET /v1/evaluations/{job_id}` — evaluation progress, stage history, and final metrics
 - `DELETE /v1/documents/{document_id}?tenant_id={tenant_id}` — authenticated deletion; the
   `tenant_id` query parameter defaults to `default`
 - `POST /v1/query` — authenticated retrieval and grounded answer
+- `POST /v1/query/stream` — query-stage events followed by the answer and evidence
 - `GET /healthz` and `GET /readyz` — liveness and dependency readiness
 - `GET /metrics` — Prometheus request counters and latency histogram buckets for p95 alerts
 
@@ -369,6 +468,53 @@ uv run prodrag-eval .\eval\salesforce-streaming-api.jsonl `
 
 These scores use an LLM judge and should be supplemented with human review of failures and a
 sample of passing cases. A citation marker alone is not treated as proof of factual support.
+
+### DeepEval RAG evaluation
+
+DeepEval is available as an optional development dependency. It complements the existing exact
+document-ID and context-phrase gates with four LLM-as-a-judge metrics recommended for RAG systems:
+
+- contextual recall: whether the retrieved contexts contain enough information for the golden answer;
+- contextual precision: whether relevant contexts are ranked ahead of irrelevant contexts;
+- faithfulness: whether claims in the generated answer are supported by retrieved context; and
+- answer relevancy: whether the generated answer directly addresses the question.
+
+The adapter uses the configured `OCI_CHAT_MODEL` through the existing LangChain OCI client, with a
+separate `RAG_EVAL_MAX_TOKENS=4000` output budget for DeepEval's larger structured judgments. It does
+not require an OpenAI key, a Confident AI account, or a hosted vector database. Qdrant remains local.
+DeepEval runs only during evaluation and reuses the answer and exact parent contexts already produced
+by `query_with_evidence`; normal user queries make no DeepEval calls.
+
+Install the development group, then run the end-to-end evaluator:
+
+```powershell
+uv sync --group dev
+
+uv run prodrag-eval .\eval\salesforce-streaming-api.jsonl `
+  --end-to-end `
+  --deepeval `
+  --min-recall 0.95 `
+  --min-deepeval-contextual-recall 0.80 `
+  --min-deepeval-contextual-precision 0.70 `
+  --min-deepeval-faithfulness 0.90 `
+  --min-deepeval-answer-relevancy 0.85 `
+  --min-abstention 0.90
+```
+
+Only answerable rows containing `expected_answer` are sent to DeepEval. Negative questions continue
+to use the deterministic `abstention_accuracy` gate. An answerable case that incorrectly abstains, or
+answers without retrieval context, receives zero for all four DeepEval metrics. The JSON report also
+includes per-case scores and judge reasons so failures can be reviewed before release.
+
+Keep the existing deterministic gates in CI: DeepEval metrics make several evaluation-only OCI judge
+calls per golden question, cost more, and are less reproducible than exact label comparisons. Calibrate
+thresholds on a development set, verify them on a held-out set, and manually review borderline cases.
+See the official [DeepEval RAG evaluation guide](https://deepeval.com/docs/getting-started-rag) and
+[custom LLM guide](https://deepeval.com/guides/guides-using-custom-llms) for the underlying metric and
+judge-model contracts.
+
+For the local-only GitLab A/B release gate, reproducible corpus, CI variables, and baseline bootstrap
+procedure, see [GitLab CI/CD RAG evaluation gate](docs/gitlab-evaluation.md).
 
 ## Production checklist
 
